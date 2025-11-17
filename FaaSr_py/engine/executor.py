@@ -83,6 +83,13 @@ class Executor:
 
                 # run R entry as a subprocess
                 try:
+                    # pass CRAN package to R entry
+                    cran_pkgs = []
+                    try:
+                        cran_pkgs = self.faasr.get("FunctionCRANPackage", {}).get(action_name, []) or []
+                    except Exception:
+                        cran_pkgs = []
+
                     r_func = subprocess.run(
                         [
                             "Rscript",
@@ -90,6 +97,7 @@ class Executor:
                             func_name,
                             json.dumps(user_args),
                             self.faasr["InvocationID"],
+                            json.dumps(cran_pkgs),
                         ]
                     )
                 except Exception as e:
