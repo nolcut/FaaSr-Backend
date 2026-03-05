@@ -370,7 +370,7 @@ def faasr_func_dependancy_install(faasr_source, action):
         faasr_source: faasr payload (FaaSr)
         action: name of current action
     """
-    func_type, func_name = action["Type"], action["FunctionName"]
+    func_type, func_name = action["Type"], action.get("FunctionName")
 
     # get token if present
     token = os.getenv("GH_PAT")

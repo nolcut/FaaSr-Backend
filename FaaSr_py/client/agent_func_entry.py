@@ -245,9 +245,10 @@ def _get_safe_builtins():
         dict: Safe builtins
     """
     safe_builtins = {
-        # I/O (restricted to /tmp)
+        # I/O
         "print": print,
         "input": input,
+        "open": open,
         # Type constructors
         "str": str,
         "int": int,
@@ -258,6 +259,9 @@ def _get_safe_builtins():
         "tuple": tuple,
         "set": set,
         "frozenset": frozenset,
+        "bytes": bytes,
+        "bytearray": bytearray,
+        "complex": complex,
         # Utilities
         "len": len,
         "range": range,
@@ -273,13 +277,22 @@ def _get_safe_builtins():
         "abs": abs,
         "round": round,
         "pow": pow,
+        "divmod": divmod,
+        "slice": slice,
         # Type checking
         "type": type,
         "isinstance": isinstance,
         "issubclass": issubclass,
+        "callable": callable,
         # String methods
         "chr": chr,
         "ord": ord,
+        "format": format,
+        "repr": repr,
+        "ascii": ascii,
+        "bin": bin,
+        "hex": hex,
+        "oct": oct,
         # Error handling
         "Exception": Exception,
         "RuntimeError": RuntimeError,
@@ -288,6 +301,9 @@ def _get_safe_builtins():
         "KeyError": KeyError,
         "IndexError": IndexError,
         "AttributeError": AttributeError,
+        "OSError": OSError,
+        "IOError": IOError,
+        "FileNotFoundError": FileNotFoundError,
         # Iteration
         "iter": iter,
         "next": next,
@@ -296,8 +312,11 @@ def _get_safe_builtins():
         "any": any,
         "hash": hash,
         "id": id,
-        # Comparison
-        "divmod": divmod,
+        # Attribute access
+        "getattr": getattr,
+        "setattr": setattr,
+        "hasattr": hasattr,
+        "delattr": delattr,
         # Import
         "__import__": __import__,
     }
