@@ -75,7 +75,8 @@
               "type": "string",
               "enum": [
                 "Python",
-                "R"
+                "R",
+                "Agent"
               ]
             },
             "RequiresVM": {
@@ -194,10 +195,44 @@
             }
           },
           "required": [
-            "FaaSServer",
-            "FunctionName"
+            "FaaSServer"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "Type": {
+                "enum": ["Python", "R"]
+              }
+            }
+          },
+          "then": {
+            "required": ["FaaSServer", "FunctionName"]
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "Type": {
+                  "const": "Agent"
+                }
+              }
+            },
+            "then": {
+              "required": ["FaaSServer", "Arguments"],
+              "properties": {
+                "Arguments": {
+                  "type": "object",
+                  "required": ["prompt"],
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Natural language prompt for the AI agent"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

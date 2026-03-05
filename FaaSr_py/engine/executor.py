@@ -40,7 +40,7 @@ class Executor:
         Arguments:
             action_name: str -- name of the action to run
         """
-        func_name = self.faasr["ActionList"][action_name]["FunctionName"]
+        func_name = self.faasr["ActionList"][action_name].get("FunctionName")
         func_type = self.faasr["ActionList"][action_name]["Type"]
         user_args = self._get_user_function_args(action_name)
 
@@ -188,6 +188,55 @@ class Executor:
             logger.error(f"Built-in function {builtin_func_name} failed: {e}")
             raise
 
+    def _run_agent_function(self, action_name, action_config, start_time):
+        """
+        Execute an agent function that uses LLM to generate and run code
+        
+        Args:
+            action_name: Name of the action
+            action_config: Action configuration
+            start_time: Start time of invocation
+            
+        Returns:
+            Function result
+        """
+        # Get the prompt from arguments
+        arguments = action_config.get("Arguments", {})
+        prompt = arguments.get("prompt")
+        
+        if not prompt:
+            raise ValueError(f"Agent action {action_name} missing 'prompt' argument")
+        
+        try:
+            from multiprocessing import Process
+            from FaaSr_py.client.agent_func_entry import run_agent_function
+            
+            logger.info(f"Starting agent: {action_name}")
+            
+            agent_proc = Process(
+                target=run_agent_function,
+                args=(self.faasr, prompt, action_name),
+            )
+            
+            agent_proc.start()
+            agent_proc.join()
+            
+            agent_res = agent_proc.exitcode
+            
+            if agent_res != 0:
+                raise RuntimeError(
+                    f"non-zero exit code ({agent_res!r}) from agent function"
+                )
+            
+            self._make_done(action_name)
+            
+            logger.info(f"Agent function {action_name} completed successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Agent function {action_name} failed: {e}")
+            raise
+
     def run_func(self, action_name, start_time):
         """
         Fetch and run the users function
@@ -197,6 +246,12 @@ class Executor:
         """
 
         action_config = self.faasr["ActionList"].get(action_name, {})
+        
+        # Check for agent function type
+        if action_config.get("Type") == "Agent":
+            logger.info(f"Executing agent function: {action_name}")
+            return self._run_agent_function(action_name, action_config, start_time)
+        
         if action_config.get("_faasr_builtin", False):
             logger.info(f"Executing built-in function: {action_name}")
             return self._run_builtin_function(action_name, action_config)
