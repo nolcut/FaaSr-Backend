@@ -40,7 +40,7 @@ class OpenAIProvider(LLMProvider):
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=2000,
+                max_tokens=3500,
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -66,7 +66,7 @@ class ClaudeProvider(LLMProvider):
         try:
             response = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
-                max_tokens=2000,
+                max_tokens=3500,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -284,13 +284,13 @@ def get_agent_provider() -> Optional[str]:
         "openai", "claude", or None if no keys found
     """
     if os.getenv("AGENT_KEY"):
-        # Check if it's OpenAI format (starts with 'sk-')
+        # Check Claude keys first (they start with 'sk-ant-')
         key = os.getenv("AGENT_KEY")
-        if key.startswith("sk-"):
-            return "openai"
-        # Claude keys typically start with 'sk-ant-'
-        elif key.startswith("sk-ant-") or "claude" in key.lower():
+        if key.startswith("sk-ant-") or "claude" in key.lower():
             return "claude"
+        # Check if it's OpenAI format (starts with 'sk-')
+        elif key.startswith("sk-"):
+            return "openai"
     
     return None
 
