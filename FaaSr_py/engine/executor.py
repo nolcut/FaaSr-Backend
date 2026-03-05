@@ -96,6 +96,8 @@ class Executor:
                     logger.error(f"Error running R function: {e}")
                     sys.exit(1)
                 func_res = r_func.returncode
+            elif func_type == "Agent":
+                self._run_agent_function(action_name, user_args)
             else:
                 logger.error(f"Unkown function type: {func_type}")
                 sys.exit(1)
@@ -188,7 +190,7 @@ class Executor:
             logger.error(f"Built-in function {builtin_func_name} failed: {e}")
             raise
 
-    def _run_agent_function(self, action_name, action_config, start_time):
+    def _run_agent_function(self, action_name, args):
         """
         Execute an agent function that uses LLM to generate and run code
         
@@ -201,8 +203,7 @@ class Executor:
             Function result
         """
         # Get the prompt from arguments
-        arguments = action_config.get("Arguments", {})
-        prompt = arguments.get("prompt")
+        prompt = args.get("prompt")
         
         if not prompt:
             raise ValueError(f"Agent action {action_name} missing 'prompt' argument")
@@ -246,11 +247,6 @@ class Executor:
         """
 
         action_config = self.faasr["ActionList"].get(action_name, {})
-        
-        # Check for agent function type
-        if action_config.get("Type") == "Agent":
-            logger.info(f"Executing agent function: {action_name}")
-            return self._run_agent_function(action_name, action_config, start_time)
         
         if action_config.get("_faasr_builtin", False):
             logger.info(f"Executing built-in function: {action_name}")
