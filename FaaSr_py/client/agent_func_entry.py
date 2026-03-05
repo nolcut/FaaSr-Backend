@@ -47,6 +47,9 @@ def run_agent_function(faasr, prompt, action_name):
         generator = AgentCodeGenerator(api_key, provider)
         code = generator.generate_code_with_context(prompt, exploration_data)
 
+        # Log generated code to S3
+        _log_generated_code_to_s3(faasr, action_name, code)
+
         # Validate code safety
         if not generator.validate_code_safety(code):
             err_msg = "Generated code failed safety validation"
@@ -85,6 +88,35 @@ def run_agent_function(faasr, prompt, action_name):
         traceback = tb_module.format_exc()
         logger.error(f"{err_msg}\n{traceback}")
         faasr_exit(message=err_msg, traceback=traceback)
+
+
+def _log_generated_code_to_s3(faasr, action_name, code):
+    """
+    Log the generated agent code to S3 for debugging/auditing
+    
+    Arguments:
+        faasr: FaaSr payload instance
+        action_name: Name of the agent action
+        code: Generated Python code to log
+    """
+    try:
+        from FaaSr_py.client.py_client_stubs import faasr_put_file
+        import time
+        
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        code_filename = f"{action_name}_generated_{timestamp}.py"
+        
+        # Write code to temp file
+        temp_path = f"/tmp/{code_filename}"
+        with open(temp_path, "w") as f:
+            f.write(code)
+        
+        # Upload to S3
+        faasr_put_file(code_filename, code_filename, local_folder="/tmp", remote_folder="agent_generated_code")
+        logger.info(f"Logged generated code to S3: agent_generated_code/{code_filename}")
+        
+    except Exception as e:
+        logger.warning(f"Could not log generated code to S3: {e}")
 
 
 def _explore_s3_context(faasr, context):
@@ -266,6 +298,8 @@ def _get_safe_builtins():
         "id": id,
         # Comparison
         "divmod": divmod,
+        # Import
+        "__import__": __import__,
     }
 
     return safe_builtins
