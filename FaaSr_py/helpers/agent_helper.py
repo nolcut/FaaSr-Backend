@@ -82,6 +82,13 @@ class AgentCodeGenerator:
     # System prompt that constrains the agent's behavior
     SYSTEM_PROMPT = """You are a FaaSr agent that can interact with S3 storage to process user data.
 
+CRITICAL OUTPUT RULES:
+- Generate ONLY pure Python code - no markdown, no triple backticks, no ```python tags
+- Do NOT include any explanatory text before or after the code
+- Do NOT wrap code in any formatting or code blocks
+- The output must be directly executable Python code
+- Start immediately with import statements or code, no pretext
+
 You have access to the following safe FaaSr functions:
 - faasr_put_file(local_file, remote_file, local_folder=".", remote_folder="."): Upload files to S3
 - faasr_get_file(local_file, remote_file, local_folder=".", remote_folder="."): Download files from S3
@@ -102,28 +109,14 @@ IMPORTANT CONSTRAINTS:
 9. You SHOULD make intelligent decisions based on what you discover
 
 Your task is to write Python code that accomplishes the user's request. The code will be executed
-in a sandboxed environment with access only to the functions listed above. Generate ONLY the Python
-code without any markdown formatting, explanations, or code blocks. The code should be complete and
-ready to execute directly.
+in a sandboxed environment with access only to the functions listed above. 
 
 IMPORTANT: Write adaptive code that explores and makes decisions:
-- First explore what files exist using faasr_get_folder_list
 - Inspect file contents to understand the data structure
 - Make decisions based on what you find (if/else, different processing paths)
 - Handle missing files gracefully and adapt your approach
 - Think like a detective - gather clues, then act based on what you discover
 - Use faasr_log to document what you're finding and what decisions you're making
-
-Example adaptive pattern:
-```
-files = faasr_get_folder_list()
-if "config.json" in files:
-    # Load config and use it to guide processing
-elif "settings.ini" in files:
-    # Different approach for ini files
-else:
-    # Fallback to scanning for data files
-```
 
 Focus on:
 - Exploration first (what's available?)
@@ -197,29 +190,21 @@ Focus on:
         # Enhanced system prompt for adaptive behavior
         adaptive_system_prompt = self.SYSTEM_PROMPT + """
 
-ADAPTIVE EXPLORATION:
-You can explore data and then change your approach by:
-1. First downloading and examining sample files
-2. Based on what you find, you can call _regenerate_approach(new_prompt, discovered_data) to get a new strategy
-3. This allows you to adapt based on actual data structure, formats, or content
+ADAPTIVE EXPLORATION AND INSIGHTS:
+1. First download and examine actual data files - don't make assumptions
+2. Analyze real content, structure, and patterns in the data
+3. Generate specific, data-driven insights based on what you actually find
+4. If needed, call _regenerate_approach(new_prompt, discovered_data) for a new strategy
+5. Avoid generic statements - be specific about what you discover in THIS data
 
-Example adaptive pattern:
-```python
-# Initial exploration
-sample_file = faasr_get_folder_list()[0]  
-faasr_get_file(f"/tmp/{sample_file}", sample_file)
+IMPORTANT: When analyzing images or data:
+- Actually read and process the files, don't just describe what they might contain
+- Extract real statistics, patterns, and insights from the actual data
+- If analyzing an image, get its real dimensions, color statistics, etc.
+- For CSV/JSON data, compute real statistics, find actual patterns
+- Always base your insights on what you ACTUALLY find, not generic knowledge
 
-with open(f"/tmp/{sample_file}") as f:
-    content = f.read()
-    
-# Discover data format
-if "CSV" in content[:100]:
-    # Regenerate approach for CSV processing
-    _regenerate_approach(
-        "Process all files as CSV with these columns: ...",
-        {"format": "csv", "sample": content[:500]}
-    )
-```"""
+Remember: NO markdown formatting, NO code blocks, just pure executable Python."""
         
         logger.info(f"Generating context-aware code for: {prompt[:100]}...")
         code = self.llm.generate_code(enhanced_prompt, adaptive_system_prompt)
@@ -229,14 +214,35 @@ if "CSV" in content[:100]:
     @staticmethod
     def _clean_code(code: str) -> str:
         """Remove markdown formatting from generated code"""
-        # Remove ```python and ``` markers
-        if code.startswith("```python"):
-            code = code[9:]
-        elif code.startswith("```"):
-            code = code[3:]
+        # Remove any leading explanatory text before code
+        lines = code.split('\n')
         
-        if code.endswith("```"):
-            code = code[:-3]
+        # Find where actual code starts (imports, function definitions, or code statements)
+        code_start = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if (stripped.startswith('import ') or 
+                stripped.startswith('from ') or
+                stripped.startswith('def ') or
+                stripped.startswith('class ') or
+                stripped.startswith('#') or
+                (stripped and not stripped[0].isupper())):  # Likely code, not prose
+                code_start = i
+                break
+        
+        # Join from where code actually starts
+        if code_start > 0:
+            code = '\n'.join(lines[code_start:])
+        
+        # Remove ```python and ``` markers
+        if '```python' in code:
+            code = code.replace('```python\n', '').replace('\n```python', '')
+        if '```' in code:
+            # Handle code blocks
+            if code.strip().startswith('```'):
+                code = code[code.index('```')+3:]
+            if code.strip().endswith('```'):
+                code = code[:code.rindex('```')]
         
         return code.strip()
 
@@ -366,6 +372,9 @@ class AdaptiveAgentExecutor:
             
             discovery_prompt = f"{self.prompt}\n\nBased on exploration, I discovered:\n{json.dumps(exploration, indent=2)}"
             regenerated_code = self.generator.generate_code(discovery_prompt)
+            
+            # Log the regenerated code for debugging
+            logger.debug(f"Regenerated code:\n{regenerated_code}")
             
             if not self.generator.validate_code_safety(regenerated_code):
                 logger.error("Regenerated code failed safety validation")
