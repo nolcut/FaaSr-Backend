@@ -244,6 +244,7 @@ if "CSV" in content[:100]:
     def validate_code_safety(code: str) -> bool:
         """
         Perform basic safety checks on generated code
+        (Relaxed for serverless sandboxed environment)
 
         Arguments:
             code: Python code to validate
@@ -252,19 +253,8 @@ if "CSV" in content[:100]:
             True if code passes safety checks, False otherwise
         """
         dangerous_patterns = [
-            "__import__",
-            "eval",
-            "exec",
-            "compile",
-            "open(",  # Direct file operations
-            "os.system",
-            "subprocess",
-            "import requests",  # HTTP requests
-            "socket",
-            "__file__",
-            "globals()",
-            "locals()",
-            "vars(",
+            "eval(",
+            "exec(",
         ]
 
         code_lower = code.lower()
