@@ -104,7 +104,7 @@ class Executor:
 
             if func_res != 0:
                 raise RuntimeError(
-                    f"non-zero exit code ({func_res!r}) from user function"
+                    f"non-zero exit code ({func_res!r}) from function"
                 )
         else:
             logger.info("SKIPPING USER FUNCTION")
@@ -222,18 +222,7 @@ class Executor:
             agent_proc.start()
             agent_proc.join()
             
-            agent_res = agent_proc.exitcode
-            
-            if agent_res != 0:
-                raise RuntimeError(
-                    f"non-zero exit code ({agent_res!r}) from agent function"
-                )
-            
-            self._make_done(action_name)
-            
-            logger.info(f"Agent function {action_name} completed successfully")
-            return True
-            
+            return agent_proc.exitcode    
         except Exception as e:
             logger.error(f"Agent function {action_name} failed: {e}")
             raise
