@@ -97,7 +97,7 @@ class Executor:
                     sys.exit(1)
                 func_res = r_func.returncode
             elif func_type == "Agent":
-                self._run_agent_function(action_name, user_args)
+                func_res = self._run_agent_function(action_name, user_args)
             else:
                 logger.error(f"Unkown function type: {func_type}")
                 sys.exit(1)
