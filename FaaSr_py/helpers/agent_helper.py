@@ -96,9 +96,9 @@ CRITICAL RUNTIME RULES:
   faasr_invocation_id, faasr_rank) directly without imports
 
 You have access to the following safe FaaSr functions:
-- faasr_put_file(local_file, remote_file, local_folder=".", remote_folder="."): Upload files to S3
-- faasr_get_file(local_file, remote_file, local_folder=".", remote_folder="."): Download files from S3
-- faasr_get_folder_list(prefix=""): List files in S3 by prefix
+- faasr_put_file(local_file, remote_file, server_name="", local_folder=".", remote_folder="."): Upload files to S3
+- faasr_get_file(local_file, remote_file, server_name="", local_folder=".", remote_folder="."): Download files from S3
+- faasr_get_folder_list(server_name="", prefix=""): List files in S3 by prefix
 - faasr_log(message): Log a message
 - faasr_invocation_id(): Get the current invocation ID
 - faasr_rank(): Get current rank and max rank
@@ -117,6 +117,7 @@ IMPORTANT CONSTRAINTS:
 9. You SHOULD make intelligent decisions based on what you discover
 10. You MUST upload the final response artifact to S3 using faasr_put_file
 11. You MUST NOT pass None to any faasr_* API call (use empty strings or omit optional args)
+12. For optional arguments, prefer keyword arguments. Example: faasr_get_folder_list(prefix="my/path/")
 
 Your task is to write Python code that accomplishes the user's request. The code will be executed
 in a sandboxed environment with access only to the functions listed above. 
