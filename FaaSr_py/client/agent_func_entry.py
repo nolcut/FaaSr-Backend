@@ -91,16 +91,16 @@ def _build_agent_graph(faasr, context, generator):
     5) Execute code (uploads final response)
     """
 
-        system_prompt = """You are a file selection assistant for S3 content (code, data, configs, logs).
+    def _node_explore_s3(state: AgentGraphState) -> Dict[str, Any]:
         logger.info("Phase: explore_s3 - start")
         exploration_data = _explore_s3_context(faasr, context)
         logger.info(
             "Phase: explore_s3 - done (file_count=%s)",
-    - Prioritize files most relevant to the user's workflow and the system prompt.
-    - If the request is about data or outputs, prefer data files (csv/json/parquet/txt) and their configs.
-    - If the request is about behavior/logic, prefer code, configs, and orchestration files.
-    - Avoid unrelated test or sample files unless explicitly requested.
-    - If unsure, pick the minimal set that most likely answers the request.
+            exploration_data.get("file_count") if isinstance(exploration_data, dict) else None,
+        )
+        return {"exploration_data": exploration_data}
+
+    def _node_select_files(state: AgentGraphState) -> Dict[str, Any]:
         logger.info("Phase: select_files - start")
         exploration_data = state.get("exploration_data", {})
         selected_files = _select_relevant_files(
@@ -218,23 +218,22 @@ def _select_relevant_files(generator: AgentCodeGenerator, prompt: str, explorati
     """
     Use the LLM to select relevant files from S3 listing
     """
-    available_files = exploration_data.get("all_files") or exploration_data.get("files") or exploration_data.get("sample_files") or []
+    available_files = (
+        exploration_data.get("all_files")
+        or exploration_data.get("files")
+        or exploration_data.get("sample_files")
+        or []
+    )
 
     if not available_files:
         return []
 
-    system_prompt = """You are a file selection assistant for a codebase.
+    system_prompt = (
+        """You are a file selection assistant.
 Return ONLY valid JSON with keys: files (list of strings), rationale (string).
 Only choose from the provided available files. Choose at most 10 files.
-
-Selection rules:
-- Prioritize files most relevant to the user's workflow and the system prompt.
-- Prefer entrypoints, orchestration logic, schedulers, config, and helpers directly tied to the request.
-- If the request mentions "workflow", "system", "agent", or "execution", prefer files in client/, engine/, helpers/, server/.
-- Avoid unrelated test or sample files unless explicitly requested.
-- If unsure, pick the minimal set that most likely governs behavior.
-
 Do not include any extra text outside JSON."""
+    )
 
     selection_prompt = (
         f"User request:\n{prompt}\n\nAvailable files:\n"
