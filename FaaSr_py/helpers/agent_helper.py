@@ -5,6 +5,8 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from FaaSr_py.helpers.agent_constraints import AgentContextManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -107,6 +109,7 @@ IMPORTANT CONSTRAINTS:
 7. You MUST handle errors gracefully with try-except blocks
 8. You SHOULD explore available data before deciding how to process it
 9. You SHOULD make intelligent decisions based on what you discover
+10. You MUST upload the final response artifact to S3 using faasr_put_file
 
 Your task is to write Python code that accomplishes the user's request. The code will be executed
 in a sandboxed environment with access only to the functions listed above. 
@@ -124,7 +127,7 @@ Focus on:
 - Adaptive processing based on findings
 - Logging discoveries and decisions"""
 
-    def __init__(self, api_key: str, provider: str = "openai"):
+    def __init__(self, api_key: str, provider: str):
         """
         Initialize the code generator
 
@@ -161,6 +164,20 @@ Focus on:
         logger.debug(f"Generated code:\n{code}")
         return code
 
+    def generate_text(self, prompt: str, system_prompt: str) -> str:
+        """
+        Generate plain text from a prompt with a custom system prompt
+
+        Arguments:
+            prompt: Natural language prompt
+            system_prompt: Custom system instruction
+
+        Returns:
+            Raw text as string
+        """
+        logger.info("Generating text response with custom system prompt")
+        return self.llm.generate_code(prompt, system_prompt)
+
     def generate_code_with_context(self, prompt: str, exploration_data: dict) -> str:
         """
         Generate Python code with S3 exploration context
@@ -184,6 +201,11 @@ Focus on:
                 
             if exploration_data.get('folders'):
                 context_info += f"\n\nFolders: {', '.join(exploration_data['folders'])}"
+
+        if exploration_data.get("file_previews"):
+            context_info += "\n\nFile previews (truncated):\n"
+            for file_name, preview in exploration_data["file_previews"].items():
+                context_info += f"\n--- {file_name} ---\n{preview}\n"
         
         enhanced_prompt = prompt + context_info
         
