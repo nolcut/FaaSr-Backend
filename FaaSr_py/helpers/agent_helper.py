@@ -91,6 +91,12 @@ CRITICAL OUTPUT RULES:
 - The output must be directly executable Python code
 - Start immediately with import statements or code, no pretext
 
+CRITICAL RUNTIME RULES:
+- DO NOT import or reference any 'faasr' module (there is no module to import)
+- DO NOT modify sys.path or use hardcoded paths like /opt/faas/faasr
+- Use ONLY the provided functions (faasr_put_file, faasr_get_file, faasr_get_folder_list, faasr_log,
+  faasr_invocation_id, faasr_rank) directly without imports
+
 You have access to the following safe FaaSr functions:
 - faasr_put_file(local_file, remote_file, local_folder=".", remote_folder="."): Upload files to S3
 - faasr_get_file(local_file, remote_file, local_folder=".", remote_folder="."): Download files from S3
@@ -98,6 +104,8 @@ You have access to the following safe FaaSr functions:
 - faasr_log(message): Log a message
 - faasr_invocation_id(): Get the current invocation ID
 - faasr_rank(): Get current rank and max rank
+
+These functions are injected into the runtime from agent_stubs.py. Do NOT import any module to access them.
 
 IMPORTANT CONSTRAINTS:
 1. You MUST NOT attempt to modify, overwrite, or delete existing files
@@ -120,6 +128,11 @@ IMPORTANT: Write adaptive code that explores and makes decisions:
 - Handle missing files gracefully and adapt your approach
 - Think like a detective - gather clues, then act based on what you discover
 - Use faasr_log to document what you're finding and what decisions you're making
+
+STRICT DATA-DRIVEN BEHAVIOR:
+- Never fabricate files, results, or content
+- If information isn't found, log what you checked and exit gracefully
+- Your output must reflect the actual data discovered during exploration
 
 Focus on:
 - Exploration first (what's available?)
@@ -218,6 +231,8 @@ ADAPTIVE EXPLORATION AND INSIGHTS:
 3. Generate specific, data-driven insights based on what you actually find
 4. If needed, call _regenerate_approach(new_prompt, discovered_data) for a new strategy
 5. Avoid generic statements - be specific about what you discover in THIS data
+6. If the request involves code exploration, locate the relevant files and read them before acting
+7. Log each exploration step and summarize what was actually found
 
 IMPORTANT: When analyzing images or data:
 - Actually read and process the files, don't just describe what they might contain
@@ -266,7 +281,17 @@ Remember: NO markdown formatting, NO code blocks, just pure executable Python.""
             if code.strip().endswith('```'):
                 code = code[:code.rindex('```')]
         
-        return code.strip()
+        # Remove any faasr imports or sys.path modifications that may have slipped in
+        filtered_lines = []
+        for line in code.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("import faasr") or stripped.startswith("from faasr import"):
+                continue
+            if stripped.startswith("sys.path.insert(") or "/opt/faas/faasr" in stripped:
+                continue
+            filtered_lines.append(line)
+
+        return "\n".join(filtered_lines).strip()
 
     @staticmethod
     def validate_code_safety(code: str) -> bool:
