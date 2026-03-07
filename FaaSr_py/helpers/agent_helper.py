@@ -105,6 +105,8 @@ You have access to the following safe FaaSr functions:
 
 These functions are injected into the runtime from agent_stubs.py. Do NOT import any module to access them.
 
+For image processing tasks, you MAY use Pillow (`from PIL import Image`).
+
 IMPORTANT CONSTRAINTS:
 1. You MUST NOT attempt to modify, overwrite, or delete existing files
 2. You MUST use descriptive file names and avoid naming conflicts
