@@ -92,40 +92,62 @@ def _build_agent_graph(faasr, context, generator):
     """
 
     def _node_explore_s3(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: explore_s3 - start")
         exploration_data = _explore_s3_context(faasr, context)
+        logger.info(
+            "Phase: explore_s3 - done (file_count=%s)",
+            exploration_data.get("file_count") if isinstance(exploration_data, dict) else None,
+        )
         return {"exploration_data": exploration_data}
 
     def _node_select_files(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: select_files - start")
         exploration_data = state.get("exploration_data", {})
         selected_files = _select_relevant_files(
             generator,
             state.get("prompt", ""),
             exploration_data,
         )
+        logger.info("Phase: select_files - done (selected=%s)", len(selected_files))
         return {"selected_files": selected_files}
 
     def _node_view_files(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: view_files - start")
         selected_files = state.get("selected_files", [])
         file_previews = _preview_relevant_files(selected_files)
+        logger.info("Phase: view_files - done (previewed=%s)", len(file_previews))
         return {"file_previews": file_previews}
 
     def _node_decide_more_exploration(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: decide_more_exploration - start")
         decision = _decide_more_exploration(
             generator,
             state.get("prompt", ""),
             state.get("exploration_data", {}),
             state.get("file_previews", {}),
         )
+        logger.info(
+            "Phase: decide_more_exploration - done (explore_more=%s, prefix=%s)",
+            decision.get("explore_more") if isinstance(decision, dict) else None,
+            decision.get("prefix") if isinstance(decision, dict) else None,
+        )
         return {"exploration_decision": decision}
 
     def _node_explore_more(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: explore_more - start")
         decision = state.get("exploration_decision", {})
         prefix = decision.get("prefix", "") if isinstance(decision, dict) else ""
         updated = _explore_more_s3_context(faasr, prefix, state.get("exploration_data", {}))
         cycle_count = int(state.get("cycle_count", 0)) + 1
+        logger.info(
+            "Phase: explore_more - done (cycle=%s, file_count=%s)",
+            cycle_count,
+            updated.get("file_count") if isinstance(updated, dict) else None,
+        )
         return {"exploration_data": updated, "cycle_count": cycle_count}
 
     def _node_generate_code(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: generate_code - start")
         exploration_data = dict(state.get("exploration_data", {}))
         if state.get("file_previews"):
             exploration_data["file_previews"] = state["file_previews"]
@@ -137,9 +159,11 @@ def _build_agent_graph(faasr, context, generator):
         if not generator.validate_code_safety(code):
             raise RuntimeError("Generated code failed safety validation")
 
+        logger.info("Phase: generate_code - done")
         return {"generated_code": code}
 
     def _node_execute_code(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Phase: execute_code - start")
         code = state.get("generated_code", "")
         if not code:
             raise RuntimeError("No generated code to execute")
@@ -159,6 +183,7 @@ def _build_agent_graph(faasr, context, generator):
         finally:
             context.restore_environment(env_backup)
 
+        logger.info("Phase: execute_code - done")
         return {"result": result}
 
     graph = StateGraph(AgentGraphState)
