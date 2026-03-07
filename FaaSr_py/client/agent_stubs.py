@@ -10,22 +10,10 @@ def agent_put_file(
     local_file, remote_file, server_name="", local_folder=".", remote_folder="."
 ):
     """
-    Agent-safe version of faasr_put_file with constraint enforcement
+    Agent-safe version of faasr_put_file
 
-    Restrictions:
-    - Cannot overwrite existing files
-    - Limited to reasonable number of requests
-    - Request counting enforced by server
+    Restrictions are enforced by the RPC server.
     """
-    # Validate through agent context if available
-    validator = globals().get("_agent_validator")
-    if validator:
-        if not validator.validate_put_request(remote_file):
-            err_msg = f"Agent put_file request rejected for {remote_file}"
-            logger.error(err_msg)
-            print(err_msg)
-            sys.exit(1)
-
     request_json = {
         "ProcedureID": "faasr_put_file",
         "Arguments": {
@@ -43,8 +31,6 @@ def agent_put_file(
         response = r.json()
         if response.get("Success", False):
             logger.info(f"Agent uploaded: {remote_file}")
-            if validator:
-                validator.increment_request_count()
             return True
         else:
             err_msg = response.get("Message", "Agent put_file request failed")
@@ -62,21 +48,10 @@ def agent_get_file(
     local_file, remote_file, server_name="", local_folder=".", remote_folder="."
 ):
     """
-    Agent-safe version of faasr_get_file with constraint enforcement
+    Agent-safe version of faasr_get_file
 
-    Restrictions:
-    - Limited to reasonable number of requests
-    - Request counting enforced by server
+    Restrictions are enforced by the RPC server.
     """
-    # Validate through agent context if available
-    validator = globals().get("_agent_validator")
-    if validator:
-        if not validator.validate_get_request(remote_file):
-            err_msg = f"Agent get_file request rejected for {remote_file}"
-            logger.error(err_msg)
-            print(err_msg)
-            sys.exit(1)
-
     request_json = {
         "ProcedureID": "faasr_get_file",
         "Arguments": {
@@ -94,8 +69,6 @@ def agent_get_file(
         response = r.json()
         if response.get("Success", False):
             logger.info(f"Agent downloaded: {remote_file}")
-            if validator:
-                validator.increment_request_count()
             return True
         else:
             err_msg = response.get("Message", "Agent get_file request failed")
@@ -123,21 +96,10 @@ def agent_delete_file(remote_file, server_name="", remote_folder=""):
 
 def agent_get_folder_list(server_name="", prefix=""):
     """
-    Agent-safe version of faasr_get_folder_list with constraint enforcement
+    Agent-safe version of faasr_get_folder_list
 
-    Restrictions:
-    - Limited to reasonable number of requests
-    - Request counting enforced by server
+    Restrictions are enforced by the RPC server.
     """
-    # Validate through agent context if available
-    validator = globals().get("_agent_validator")
-    if validator:
-        if not validator.validate_folder_list_request():
-            err_msg = "Agent get_folder_list request rejected"
-            logger.error(err_msg)
-            print(err_msg)
-            sys.exit(1)
-
     request_json = {
         "ProcedureID": "faasr_get_folder_list",
         "Arguments": {"server_name": server_name, "prefix": str(prefix)},
@@ -148,8 +110,6 @@ def agent_get_folder_list(server_name="", prefix=""):
     try:
         response = r.json()
         if response.get("Success", False):
-            if validator:
-                validator.increment_request_count()
             return response["Data"]["folder_list"]
         else:
             err_msg = response.get("Message", "Agent get_folder_list request failed")

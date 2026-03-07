@@ -8,7 +8,6 @@ from typing import Any, Dict, List, TypedDict
 from langgraph.graph import END, StateGraph
 
 from FaaSr_py.client.py_client_stubs import faasr_exit, faasr_log, faasr_return
-from FaaSr_py.helpers.agent_constraints import AgentContextManager
 from FaaSr_py.helpers.agent_helper import (
     AgentCodeGenerator,
     get_agent_api_key,
@@ -42,9 +41,6 @@ def run_agent_function(faasr, prompt, action_name):
     """
     logger.info(f"Starting agent execution for {action_name} with prompt: {prompt[:100]}")
 
-    # Initialize constraints
-    context = AgentContextManager(faasr)
-
     try:
         # Get API key and provider
         api_key = get_agent_api_key()
@@ -59,7 +55,7 @@ def run_agent_function(faasr, prompt, action_name):
 
         generator = AgentCodeGenerator(api_key, provider)
 
-        graph = _build_agent_graph(faasr, context, generator)
+        graph = _build_agent_graph(faasr, generator)
         final_state = graph.invoke(
             {
                 "prompt": prompt,
@@ -79,7 +75,7 @@ def run_agent_function(faasr, prompt, action_name):
         faasr_exit(message=err_msg, traceback=traceback)
 
 
-def _build_agent_graph(faasr, context, generator):
+def _build_agent_graph(faasr, generator):
     """
     Build the langgraph execution flow for the agent
 
@@ -93,7 +89,7 @@ def _build_agent_graph(faasr, context, generator):
 
     def _node_explore_s3(state: AgentGraphState) -> Dict[str, Any]:
         logger.info("Phase: explore_s3 - start")
-        exploration_data = _explore_s3_context(faasr, context)
+        exploration_data = _explore_s3_context(faasr)
         logger.info(
             "Phase: explore_s3 - done (file_count=%s)",
             exploration_data.get("file_count") if isinstance(exploration_data, dict) else None,
@@ -168,20 +164,16 @@ def _build_agent_graph(faasr, context, generator):
         if not code:
             raise RuntimeError("No generated code to execute")
 
-        agent_namespace = _prepare_agent_namespace(faasr, context)
+        agent_namespace = _prepare_agent_namespace(faasr)
 
         agent_namespace["_regenerate_approach"] = lambda new_prompt, discovered_data: _adaptive_regeneration(
-            generator, new_prompt, discovered_data, agent_namespace, context
+            generator, new_prompt, discovered_data, agent_namespace
         )
 
-        env_backup = context.sanitize_environment()
-        try:
-            logger.info("Executing generated agent code")
-            exec(code, agent_namespace)
-            result = agent_namespace.get("result", True)
-            logger.info("Agent execution completed successfully")
-        finally:
-            context.restore_environment(env_backup)
+        logger.info("Executing generated agent code")
+        exec(code, agent_namespace)
+        result = agent_namespace.get("result", True)
+        logger.info("Agent execution completed successfully")
 
         logger.info("Phase: execute_code - done")
         return {"result": result}
@@ -429,7 +421,7 @@ def _log_generated_code_to_s3(faasr, action_name, code):
         logger.warning(f"Could not log generated code to S3: {e}")
 
 
-def _explore_s3_context(faasr, context):
+def _explore_s3_context(faasr):
     """
     Explore S3 to provide context for agent code generation
     
@@ -476,7 +468,7 @@ def _explore_s3_context(faasr, context):
         return {"error": "Could not list S3 files"}
 
 
-def _adaptive_regeneration(generator, new_prompt, discovered_data, namespace, context):
+def _adaptive_regeneration(generator, new_prompt, discovered_data, namespace):
     """
     Allow agent to regenerate approach based on discovered data
     
@@ -500,13 +492,12 @@ def _adaptive_regeneration(generator, new_prompt, discovered_data, namespace, co
     exec(new_code, namespace)
     
 
-def _prepare_agent_namespace(faasr, context):
+def _prepare_agent_namespace(faasr):
     """
     Prepare the execution namespace for agent code
 
     Arguments:
         faasr: FaaSr payload
-        context: AgentContextManager instance
 
     Returns:
         dict: Namespace for exec()
@@ -540,9 +531,6 @@ def _prepare_agent_namespace(faasr, context):
         "re": __import__("re"),
         "pathlib": __import__("pathlib"),
         "Path": Path,
-        # Store context for validators
-        "_agent_context": context,
-        "_agent_validator": context.validator,
     }
 
     return namespace
