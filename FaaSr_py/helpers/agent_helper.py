@@ -116,6 +116,7 @@ IMPORTANT CONSTRAINTS:
 8. You SHOULD explore available data before deciding how to process it
 9. You SHOULD make intelligent decisions based on what you discover
 10. You MUST upload the final response artifact to S3 using faasr_put_file
+11. You MUST NOT pass None to any faasr_* API call (use empty strings or omit optional args)
 
 Your task is to write Python code that accomplishes the user's request. The code will be executed
 in a sandboxed environment with access only to the functions listed above. 
