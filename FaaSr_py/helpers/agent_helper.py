@@ -231,10 +231,9 @@ ADAPTIVE EXPLORATION AND INSIGHTS:
 1. First download and examine actual data files - don't make assumptions
 2. Analyze real content, structure, and patterns in the data
 3. Generate specific, data-driven insights based on what you actually find
-4. If needed, call _regenerate_approach(new_prompt, discovered_data) for a new strategy
-5. Avoid generic statements - be specific about what you discover in THIS data
-6. If the request involves code exploration, locate the relevant files and read them before acting
-7. Log each exploration step and summarize what was actually found
+4. Avoid generic statements - be specific about what you discover in THIS data
+5. If the request involves code exploration, locate the relevant files and read them before acting
+6. Log each exploration step and summarize what was actually found
 
 IMPORTANT: When analyzing images or data:
 - Actually read and process the files, don't just describe what they might contain

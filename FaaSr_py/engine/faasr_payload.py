@@ -28,10 +28,10 @@ class FaaSrPayload:
     - Workflow is union of base workflow (from github) and overwritten fields
 
     - The URL points to a GitHub file containing the workflow JSON
-    - and follows the form {username}/{repo}/{path}.
+    - and follows the form {username}/{repo}/{path}
 
     - Methods to validate the workflow, replace secrets, check S3 data stores,
-    - init log, and self-abort.
+    - init log, and self-abort
 
     Top level changes (e.g. faasr_obj["FunctionInvoke"] = some_func)
     are tracked in self.overwritten and the scheduler will

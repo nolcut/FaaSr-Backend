@@ -166,10 +166,6 @@ def _build_agent_graph(faasr, generator):
 
         agent_namespace = _prepare_agent_namespace(faasr)
 
-        agent_namespace["_regenerate_approach"] = lambda new_prompt, discovered_data: _adaptive_regeneration(
-            generator, new_prompt, discovered_data, agent_namespace
-        )
-
         logger.info("Executing generated agent code")
         exec(code, agent_namespace)
         result = agent_namespace.get("result", True)
@@ -221,14 +217,27 @@ def _select_relevant_files(generator: AgentCodeGenerator, prompt: str, explorati
         return []
 
     system_prompt = (
-        """You are a file selection assistant.
+        """You are a file selection assistant for a code-generation agent.
+Choose files that maximize the chance of fulfilling the user request accurately.
+
+Selection priorities:
+1) Files directly referenced by the request (names, paths, entities)
+2) Core data/config/schema files needed to understand structure
+3) Inputs needed to produce the expected output artifact
+4) Avoid redundant or low-signal files
+
 Return ONLY valid JSON with keys: files (list of strings), rationale (string).
 Only choose from the provided available files. Choose at most 10 files.
 Do not include any extra text outside JSON."""
     )
 
+    folders = exploration_data.get("folders") or []
+
     selection_prompt = (
-        f"User request:\n{prompt}\n\nAvailable files:\n"
+        f"User request:\n{prompt}\n\n"
+        f"Known folders:\n"
+        + "\n".join(f"- {f}" for f in folders[:50])
+        + "\n\nAvailable files:\n"
         + "\n".join(f"- {f}" for f in available_files)
     )
 
@@ -435,7 +444,7 @@ def _explore_s3_context(faasr):
         files = faasr_get_folder_list()
         
         # Only include if list is reasonable size
-        if len(files) <= 100:
+        if len(files) <= 50:
             # Group by prefix/folder
             folders = {}
             for file in files:
@@ -466,31 +475,6 @@ def _explore_s3_context(faasr):
     except Exception as e:
         logger.warning(f"Could not explore S3: {e}")
         return {"error": "Could not list S3 files"}
-
-
-def _adaptive_regeneration(generator, new_prompt, discovered_data, namespace):
-    """
-    Allow agent to regenerate approach based on discovered data
-    
-    This function is exposed to agent code as _regenerate_approach()
-    """
-    logger.info("Agent requesting adaptive regeneration based on discoveries")
-    
-    # Combine original context with new discoveries
-    enhanced_prompt = f"""Based on discovered data: {discovered_data}
-
-{new_prompt}"""
-    
-    # Generate new code
-    new_code = generator.generate_code_with_context(enhanced_prompt, discovered_data)
-    
-    # Validate safety
-    if not generator.validate_code_safety(new_code):
-        raise RuntimeError("Regenerated code failed safety validation")
-    
-    # Execute new code in same namespace
-    exec(new_code, namespace)
-    
 
 def _prepare_agent_namespace(faasr):
     """
