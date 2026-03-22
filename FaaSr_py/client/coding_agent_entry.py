@@ -223,8 +223,9 @@ def main():
             write_result(False, "LLM returned empty code")
             sys.exit(1)
 
-        # Save generated code to output dir for audit/aggregation
+        # Save generated code to output dir for upload
         output_dir = context.get("output_dir", "/tmp/agent/output")
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         code_path = Path(output_dir) / "coding_agent_code.py"
         try:
             code_path.write_text(code)

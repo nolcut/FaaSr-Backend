@@ -214,8 +214,8 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
 
         # Enforce max 1 loopback
         if decision == "loop_back" and loop_count >= 1:
-            logger.warning("Max loopbacks reached — overriding to continue")
-            decision = "continue"
+            logger.warning("Max loopbacks reached — returning failure")
+            faasr_exit(error=True)
 
         new_loop_count = loop_count + (1 if decision == "loop_back" else 0)
 
