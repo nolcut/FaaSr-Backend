@@ -223,16 +223,6 @@ def main():
             write_result(False, "LLM returned empty code")
             sys.exit(1)
 
-        # Save generated code to output dir for upload
-        output_dir = context.get("output_dir", "/tmp/agent/output")
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        code_path = Path(output_dir) / "coding_agent_code.py"
-        try:
-            code_path.write_text(code)
-            _faasr_log(f"Saved generated code to {code_path.name}")
-        except Exception as e:
-            _faasr_log(f"Warning: could not save generated code: {e}")
-
     except Exception as e:
         write_result(False, f"Code generation error: {e}\n{traceback.format_exc()}")
         sys.exit(1)
@@ -251,6 +241,14 @@ def main():
     def _faasr_log(msg):
         with open(_log_path, "a") as _f:
             _f.write(str(msg) + "\n")
+
+    # Save generated code to output dir for upload
+    code_path = Path(output_dir) / "coding_agent_code.py"
+    try:
+        code_path.write_text(code)
+        _faasr_log(f"Saved generated code to {code_path.name}")
+    except Exception as e:
+        _faasr_log(f"Warning: could not save generated code: {e}")
 
     def _faasr_install(package_name: str):
         import subprocess
