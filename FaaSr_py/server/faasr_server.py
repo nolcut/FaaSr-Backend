@@ -125,7 +125,8 @@ def register_request_handler(faasr_payload):
                             _check_agent_put_file_safety(faasr_payload, args, existing_keys_snapshot)
                         except RuntimeError as e:
                             return Response(Success=False, Message=str(e))
-                    faasr_put_file(faasr_payload=faasr_payload, **args)
+                    put_file_args = {k: v for k, v in args.items() if k != "description"}
+                    faasr_put_file(faasr_payload=faasr_payload, **put_file_args)
                     if request.IsAgentRequest:
                         _handle_agent_post_put(faasr_payload, args)
                 case "faasr_get_file":
