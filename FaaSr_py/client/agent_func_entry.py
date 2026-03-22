@@ -232,8 +232,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         _log_file = Path("/tmp/agent/logs/coding_agent.log")
         if _log_file.exists():
             try:
-                faasr_put_file(
-                    faasr_payload=faasr,
+                agent_put_file(
                     local_file=_log_file.name,
                     local_folder=str(_log_file.parent),
                     remote_file=f"{state.get('function_invoke', 'agent')}_coding_agent.log",
@@ -420,10 +419,10 @@ def _clear_dir(path: str):
 def _start_duration_monitor(stop_event: threading.Event, faasr):
     """Start a background thread that checkpoints state if the function nears timeout."""
     def _monitor():
-        if not stop_event.wait(840):  # fires if not stopped within 840s
+        if not stop_event.wait(800):  # stops function if still running after 800s
             logger.warning("Function approaching timeout — checkpointing")
-            _checkpoint_state_to_s3(faasr)
-            faasr_extend()  # stub — does nothing for now
+            _checkpoint_state_to_s3(faasr) # filler right now
+            faasr_extend()  # does nothing (todo fix)
 
     threading.Thread(target=_monitor, daemon=True).start()
 

@@ -195,7 +195,8 @@
             }
           },
           "required": [
-            "FaaSServer"
+            "FaaSServer",
+            "InvokeNext"
           ],
           "additionalProperties": false,
           "if": {

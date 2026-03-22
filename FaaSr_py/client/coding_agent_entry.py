@@ -120,6 +120,20 @@ def _build_system_prompt(context: dict) -> str:
             )
         file_summary = "Input files:\n" + "\n\n".join(parts)
 
+    available_packages = """\
+AVAILABLE PYTHON PACKAGES (pre-installed, import directly):
+- numpy
+- scipy
+- pandas
+- matplotlib
+- Pillow (import PIL)
+- openai, anthropic
+- langgraph
+- requests
+- PyYAML (import yaml)
+- pydantic
+Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are also available."""
+
     return f"""You are a FaaSr coding agent. You process data files and write results to disk.
 
 CRITICAL OUTPUT RULES:
@@ -134,12 +148,15 @@ CRITICAL RUNTIME RULES:
 - Write ALL outputs to: {output_dir} (JSON or image files: .png, .jpg, .jpeg)
 - Use the input_dir and output_dir variables injected into the runtime
 - Never hardcode run IDs or invocation IDs — use faasr_invocation_id() if needed
-- Prioritize packages already importable before installing new ones
+- If you need a package not listed below, call faasr_install("package_name") before importing it
 
 AVAILABLE FUNCTIONS (injected into runtime, do not import):
 - faasr_log(log_message): Append a message to the local log file (uploaded to S3 by the eval agent)
 - faasr_invocation_id(): Returns the current invocation ID string
 - faasr_rank(): Returns a dict with "rank" and "max_rank"
+- faasr_install(package_name): Install a Python package at runtime via pip (call before importing)
+
+{available_packages}
 
 WORKFLOW CONTEXT:
 {json.dumps(workflow_spec, indent=2)}
@@ -225,10 +242,22 @@ def main():
         with open(_log_path, "a") as _f:
             _f.write(str(msg) + "\n")
 
+    def _faasr_install(package_name: str):
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"pip install {package_name!r} failed:\n{result.stderr}")
+        _faasr_log(f"Installed package: {package_name}")
+
     # Build execution namespace
     namespace = {
         "__builtins__": _get_safe_builtins(),
         "faasr_log": _faasr_log,
+        "faasr_install": _faasr_install,
         "faasr_invocation_id": lambda: _invocation_id,
         "faasr_rank": lambda: _rank,
         # Injected variables

@@ -99,6 +99,8 @@ class NsjailBackend(CodingAgentBackend):
                 "-Mo",
                 "--time_limit", str(self.timeout),
                 "--bindmount", "/tmp",
+                "--disable_clone_newnet",   # allow network access (needed for pip installs)
+                "--disable_clone_newuser",  # avoid clone() permission errors in containers
                 "--",
                 sys.executable,
                 str(_ENTRY_SCRIPT),
