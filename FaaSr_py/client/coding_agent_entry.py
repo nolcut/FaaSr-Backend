@@ -131,7 +131,7 @@ CRITICAL RUNTIME RULES:
 - Use ONLY the provided functions (faasr_log, faasr_invocation_id, faasr_rank) for meta-context
 - DO NOT perform any S3 operations — no faasr_put_file, no faasr_get_file
 - Read inputs from: {input_dir}
-- Write ALL outputs as JSON files to: {output_dir}
+- Write ALL outputs to: {output_dir} (JSON or image files: .png, .jpg, .jpeg)
 - Use the input_dir and output_dir variables injected into the runtime
 - Never hardcode run IDs or invocation IDs — use faasr_invocation_id() if needed
 - Prioritize packages already importable before installing new ones

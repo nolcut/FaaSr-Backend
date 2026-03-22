@@ -342,10 +342,8 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
                 rows += [next(reader, []) for _ in range(3)]
             return "\n".join(",".join(row) for row in rows if row)
 
-        # Fallback: first 200 bytes as hex
-        with open(local_path, "rb") as f:
-            raw = f.read(200)
-        return raw.hex()
+        # Binary/image files — no sampling
+        return ""
 
     except Exception as e:
         logger.warning(f"Could not sample {local_path}: {e}")
