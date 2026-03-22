@@ -223,6 +223,15 @@ def main():
             write_result(False, "LLM returned empty code")
             sys.exit(1)
 
+        # Save generated code to output dir for audit/aggregation
+        output_dir = context.get("output_dir", "/tmp/agent/output")
+        code_path = Path(output_dir) / "coding_agent_code.py"
+        try:
+            code_path.write_text(code)
+            _faasr_log(f"Saved generated code to {code_path.name}")
+        except Exception as e:
+            _faasr_log(f"Warning: could not save generated code: {e}")
+
     except Exception as e:
         write_result(False, f"Code generation error: {e}\n{traceback.format_exc()}")
         sys.exit(1)
