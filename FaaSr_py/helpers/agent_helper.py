@@ -30,16 +30,16 @@ class OpenAIProvider(LLMProvider):
             logger.error("openai package not installed. Install with: pip install openai")
             sys.exit(1)
 
-    def generate_code(self, prompt: str, system_prompt: str) -> str:
+    def generate_code(self, prompt: str, system_prompt: str, temperature: float = 0.2) -> str:
         """Generate Python code using OpenAI's API"""
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.7,
+                temperature=temperature,
                 max_tokens=3500,
             )
             return response.choices[0].message.content
@@ -61,12 +61,13 @@ class ClaudeProvider(LLMProvider):
             logger.error("anthropic package not installed. Install with: pip install anthropic")
             sys.exit(1)
 
-    def generate_code(self, prompt: str, system_prompt: str) -> str:
+    def generate_code(self, prompt: str, system_prompt: str, temperature: float = 0.2) -> str:
         """Generate Python code using Claude's API"""
         try:
             response = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=3500,
+                temperature=temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -179,19 +180,20 @@ Focus on:
         logger.debug(f"Generated code:\n{code}")
         return code
 
-    def generate_text(self, prompt: str, system_prompt: str) -> str:
+    def generate_text(self, prompt: str, system_prompt: str, temperature: float = 0.2) -> str:
         """
         Generate plain text from a prompt with a custom system prompt
 
         Arguments:
             prompt: Natural language prompt
             system_prompt: Custom system instruction
+            temperature: Sampling temperature
 
         Returns:
             Raw text as string
         """
         logger.info("Generating text response with custom system prompt")
-        return self.llm.generate_code(prompt, system_prompt)
+        return self.llm.generate_code(prompt, system_prompt, temperature)
 
     def generate_code_with_context(self, prompt: str, exploration_data: dict) -> str:
         """

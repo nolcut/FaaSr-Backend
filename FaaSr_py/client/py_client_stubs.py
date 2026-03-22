@@ -222,6 +222,11 @@ def faasr_return(return_value=None):
         sys.exit(1)
 
 
+def faasr_extend():
+    """Request an extension of function execution time. Stub — not yet implemented."""
+    pass
+
+
 def faasr_exit(message=None, error=True, traceback=None):
     exit_json = {"Error": error, "Message": message, "Traceback": traceback}
     r = requests.post("http://127.0.0.1:8000/faasr-exit", json=exit_json)

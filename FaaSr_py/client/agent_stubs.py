@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def agent_put_file(
-    local_file, remote_file, server_name="", local_folder=".", remote_folder="."
+    local_file, remote_file, server_name="", local_folder=".", remote_folder=".", description=""
 ):
     """
     Agent-safe version of faasr_put_file
@@ -22,8 +22,9 @@ def agent_put_file(
             "server_name": server_name,
             "local_folder": str(local_folder),
             "remote_folder": str(remote_folder),
+            "description": str(description),
         },
-        "IsAgentRequest": True,  # Flag for server-side constraint checking
+        "IsAgentRequest": True,
     }
 
     r = requests.post("http://127.0.0.1:8000/faasr-action", json=request_json)
