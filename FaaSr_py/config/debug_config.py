@@ -87,8 +87,8 @@ class Config:
             faasr_payload=faasr_payload, level=level, start_time=start_time
         )
 
-        # Remove any existing stdout handlers before adding S3 handler
-        logger.handlers = [h for h in logger.handlers if not isinstance(h, logging.StreamHandler) or isinstance(h, logging.FileHandler)]
+        # Replace all existing handlers — prevents inheriting duplicates from parent process
+        logger.handlers.clear()
 
         # Filter out 3rd party packages
         s3_log_handler.addFilter(FaaSrFilter())

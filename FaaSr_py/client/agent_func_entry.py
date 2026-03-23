@@ -15,6 +15,7 @@ from FaaSr_py.client.coding_agent_backend import get_coding_backend
 from FaaSr_py.client.py_client_stubs import faasr_exit, faasr_extend, faasr_return
 from FaaSr_py.helpers.agent_helper import AgentCodeGenerator, get_agent_api_key, get_agent_provider
 from FaaSr_py.helpers.rank import faasr_rank as _faasr_rank
+from FaaSr_py.helpers.s3_helper_functions import flush_s3_log
 from FaaSr_py.s3_api import faasr_get_file, faasr_put_file
 from FaaSr_py.s3_api.registry import faasr_registry_query
 
@@ -81,6 +82,8 @@ def run_agent_function(faasr, prompt, action_name):
         traceback = tb_module.format_exc()
         logger.error(f"{err_msg}\n{traceback}")
         faasr_exit(message=err_msg, traceback=traceback)
+    finally:
+        flush_s3_log()
 
 
 def _build_agent_graph(faasr, generator: AgentCodeGenerator):

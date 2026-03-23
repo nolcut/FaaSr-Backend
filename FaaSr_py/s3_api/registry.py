@@ -201,7 +201,7 @@ def init_immutable_registry(faasr_payload):
 
     for uri in global_files:
         parts = uri.rsplit("/", 1)
-        folder, file = (parts[0], parts[1]) if len(parts) == 2 else (".", parts[0])
+        folder, file = (parts[0], parts[1]) if len(parts) == 2 else ("", parts[0])
         if faasr_file_exists(faasr_payload, folder, file):
             entries.append(_make_global_entry(uri, invocation_id))
         else:
