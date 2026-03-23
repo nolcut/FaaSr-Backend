@@ -43,6 +43,16 @@
       "description": "The name of the Log file's folder",
       "type": "string"
     },
+    "GlobalInputFiles": {
+      "description": "Pre-existing file URIs (folder/file.ext) made available to all agents as read-only inputs",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "GlobalInputFolders": {
+      "description": "S3 folder prefixes to recursively scan; all discovered files become read-only registry entries",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "FunctionRank": {
       "description": "The rank of the current function (optional)",
       "type": "integer"

@@ -70,6 +70,14 @@ class Exit(BaseModel):
     Traceback: str | None = None
 
 
+class BlockRequest(BaseModel):
+    secret: str
+
+
+class UnblockRequest(BaseModel):
+    secret: str
+
+
 def register_request_handler(faasr_payload):
     """ "
     Setup FastAPI request handlers for FaaSr functions
@@ -82,7 +90,25 @@ def register_request_handler(faasr_payload):
     traceback = None
     error = False
     agent_request_count = 0  # Local counter for agent requests
+    blocked = False
+    block_secret = None
     existing_keys_snapshot = faasr_snapshot_existing_keys(faasr_payload)  # frozen at startup
+
+    @faasr_api.post("/faasr-block")
+    def faasr_block_handler(req: BlockRequest):
+        nonlocal blocked, block_secret
+        blocked = True
+        block_secret = req.secret
+        return Response(Success=True)
+
+    @faasr_api.post("/faasr-unblock")
+    def faasr_unblock_handler(req: UnblockRequest):
+        nonlocal blocked, block_secret
+        if req.secret != block_secret:
+            return Response(Success=False, Message="Invalid unblock secret")
+        blocked = False
+        block_secret = None
+        return Response(Success=True)
 
     @faasr_api.post("/faasr-action")
     def faasr_request_handler(request: Request):
@@ -95,6 +121,8 @@ def register_request_handler(faasr_payload):
         - Agents cannot overwrite files registered by upstream actions
         """
         nonlocal error, agent_request_count
+        if blocked:
+            return Response(Success=False, Message="Server temporarily blocked during agent execution")
         logger.info(f"Processing request: {request.ProcedureID} (Agent: {request.IsAgentRequest})")
 
         # Check agent constraints

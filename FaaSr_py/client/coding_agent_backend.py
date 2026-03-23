@@ -1,12 +1,15 @@
 import json
 import logging
 import os
+import secrets
 import subprocess
 import sys
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+
+from FaaSr_py.client.agent_stubs import faasr_block_requests, faasr_unblock_requests
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +51,21 @@ class DirectExecBackend(CodingAgentBackend):
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
         result_file = f"/tmp/faasr_agent_result_{run_id}.json"
 
+        secret = secrets.token_hex(32)
         try:
             with open(ctx_file, "w") as f:
                 json.dump(context, f)
 
-            env = _filtered_env()
-            subprocess.run(
-                [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
-                env=env,
-                timeout=self.timeout,
-            )
+            faasr_block_requests(secret)
+            try:
+                env = _filtered_env()
+                subprocess.run(
+                    [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
+                    env=env,
+                    timeout=self.timeout,
+                )
+            finally:
+                faasr_unblock_requests(secret)
 
             return _read_result(result_file)
 
@@ -89,25 +97,30 @@ class NsjailBackend(CodingAgentBackend):
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
         result_file = f"/tmp/faasr_agent_result_{run_id}.json"
 
+        secret = secrets.token_hex(32)
         try:
             with open(ctx_file, "w") as f:
                 json.dump(context, f)
 
-            env = _filtered_env()
-            cmd = [
-                "nsjail",
-                "-Mo",
-                "--time_limit", str(self.timeout),
-                "--bindmount", "/tmp",
-                "--disable_clone_newnet",   # allow network access (needed for pip installs)
-                "--disable_clone_newuser",  # avoid clone() permission errors in containers
-                "--",
-                sys.executable,
-                str(_ENTRY_SCRIPT),
-                ctx_file,
-                result_file,
-            ]
-            subprocess.run(cmd, env=env, timeout=self.timeout + 10)
+            faasr_block_requests(secret)
+            try:
+                env = _filtered_env()
+                cmd = [
+                    "nsjail",
+                    "-Mo",
+                    "--time_limit", str(self.timeout),
+                    "--bindmount", "/tmp",
+                    "--disable_clone_newnet",   # allow network access (needed for pip installs)
+                    "--disable_clone_newuser",  # avoid clone() permission errors in containers
+                    "--",
+                    sys.executable,
+                    str(_ENTRY_SCRIPT),
+                    ctx_file,
+                    result_file,
+                ]
+                subprocess.run(cmd, env=env, timeout=self.timeout + 10)
+            finally:
+                faasr_unblock_requests(secret)
 
             return _read_result(result_file)
 
@@ -128,7 +141,7 @@ class NsjailBackend(CodingAgentBackend):
 def _filtered_env() -> dict:
     """Return a minimal environment for the coding agent subprocess.
     Explicitly excludes AWS credentials and any DataStore secrets."""
-    allowed = {"AGENT_KEY", "PATH", "HOME", "PYTHONPATH", "TMPDIR", "LANG", "LC_ALL"}
+    allowed = {"PATH", "HOME", "PYTHONPATH", "TMPDIR", "LANG", "LC_ALL"}
     return {k: v for k, v in os.environ.items() if k in allowed and v is not None}
 
 

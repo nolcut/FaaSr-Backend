@@ -228,14 +228,15 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             _clear_dir(OUTPUT_DIR)
             _clear_dir(INPUT_DIR)
 
-        # Upload coding agent log to S3
+        # Upload coding agent log to S3 (with invocation ID to make it unique)
         _log_file = Path("/tmp/agent/logs/coding_agent.log")
         if _log_file.exists():
             try:
+                invocation_id = faasr.get("InvocationID", "unknownID")
                 agent_put_file(
                     local_file=_log_file.name,
                     local_folder=str(_log_file.parent),
-                    remote_file=f"{state.get('function_invoke', 'agent')}_coding_agent.log",
+                    remote_file=f"{state.get('function_invoke', 'agent')}_{invocation_id}_coding_agent.log",
                     remote_folder=f"{state.get('function_invoke', 'agent')}_logs",
                 )
             except Exception as e:

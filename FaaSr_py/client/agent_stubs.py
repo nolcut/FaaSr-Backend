@@ -229,3 +229,25 @@ def agent_get_s3_creds():
     logger.error(err_msg)
     print(err_msg)
     sys.exit(1)
+
+
+def faasr_block_requests(secret: str):
+    """
+    Block the RPC server from accepting /faasr-action requests.
+
+    Called by the main process before spawning the agent subprocess to prevent
+    the untrusted generated code from reaching the RPC server.
+    """
+    r = requests.post("http://127.0.0.1:8000/faasr-block", json={"secret": secret})
+    r.raise_for_status()
+
+
+def faasr_unblock_requests(secret: str):
+    """
+    Unblock the RPC server, resuming normal /faasr-action handling.
+
+    Called by the main process after the agent subprocess exits.
+    Requires the same secret used to block.
+    """
+    r = requests.post("http://127.0.0.1:8000/faasr-unblock", json={"secret": secret})
+    r.raise_for_status()

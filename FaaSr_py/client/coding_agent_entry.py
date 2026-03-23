@@ -243,7 +243,8 @@ def main():
             _f.write(str(msg) + "\n")
 
     # Save generated code to output dir for upload
-    code_path = Path(output_dir) / "coding_agent_code.py"
+    function_invoke = context.get("function_invoke", "coding_agent")
+    code_path = Path(output_dir) / f"{function_invoke}.py"
     try:
         code_path.write_text(code)
         _faasr_log(f"Saved generated code to {code_path.name}")
