@@ -140,8 +140,10 @@ class NsjailBackend(CodingAgentBackend):
 
 def _filtered_env() -> dict:
     """Return a minimal environment for the coding agent subprocess.
-    Explicitly excludes AWS credentials and any DataStore secrets."""
-    allowed = {"PATH", "HOME", "PYTHONPATH", "TMPDIR", "LANG", "LC_ALL"}
+    Explicitly excludes AWS credentials and any DataStore secrets.
+    AGENT_KEY is passed through so the subprocess can call the LLM for code generation,
+    but coding_agent_entry.py scrubs it before exec-ing the generated code."""
+    allowed = {"PATH", "HOME", "PYTHONPATH", "TMPDIR", "LANG", "LC_ALL", "AGENT_KEY"}
     return {k: v for k, v in os.environ.items() if k in allowed and v is not None}
 
 

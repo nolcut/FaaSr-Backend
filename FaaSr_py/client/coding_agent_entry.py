@@ -284,6 +284,9 @@ def main():
         "Path": Path,
     }
 
+    # Scrub the agent key before executing generated code
+    os.environ.pop("AGENT_KEY", None)
+
     try:
         exec(code, namespace)
         write_result(True)
