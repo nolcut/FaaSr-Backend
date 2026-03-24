@@ -59,14 +59,19 @@ class DirectExecBackend(CodingAgentBackend):
             faasr_block_requests(secret)
             try:
                 env = _filtered_env()
-                subprocess.run(
+                proc = subprocess.run(
                     [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
                     env=env,
                     timeout=self.timeout,
+                    capture_output=True,
+                    text=True,
                 )
             finally:
                 faasr_unblock_requests(secret)
 
+            _append_subprocess_output(proc)
+            if proc.returncode != 0:
+                logger.warning(f"Coding agent subprocess exited with code {proc.returncode}")
             return _read_result(result_file)
 
         except subprocess.TimeoutExpired:
@@ -118,10 +123,13 @@ class NsjailBackend(CodingAgentBackend):
                     ctx_file,
                     result_file,
                 ]
-                subprocess.run(cmd, env=env, timeout=self.timeout + 10)
+                proc = subprocess.run(cmd, env=env, timeout=self.timeout + 10, capture_output=True, text=True)
             finally:
                 faasr_unblock_requests(secret)
 
+            _append_subprocess_output(proc)
+            if proc.returncode != 0:
+                logger.warning(f"Coding agent subprocess exited with code {proc.returncode}")
             return _read_result(result_file)
 
         except subprocess.TimeoutExpired:
@@ -136,6 +144,21 @@ class NsjailBackend(CodingAgentBackend):
                     Path(path).unlink(missing_ok=True)
                 except Exception:
                     pass
+
+
+def _append_subprocess_output(proc) -> None:
+    """Append subprocess stdout/stderr to the coding agent log file."""
+    if not (proc.stdout or proc.stderr):
+        return
+    log_path = Path("/tmp/agent/logs/coding_agent.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as lf:
+        if proc.stdout:
+            lf.write("\n--- subprocess stdout ---\n")
+            lf.write(proc.stdout)
+        if proc.stderr:
+            lf.write("\n--- subprocess stderr ---\n")
+            lf.write(proc.stderr)
 
 
 def _filtered_env() -> dict:

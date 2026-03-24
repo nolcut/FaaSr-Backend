@@ -193,6 +193,8 @@ Focus on:
             Raw text as string
         """
         logger.info("Generating text response with custom system prompt")
+        logger.debug(f"generate_text system_prompt (first 300 chars): {(system_prompt or '')[:300]}")
+        logger.debug(f"generate_text temperature: {temperature}")
         return self.llm.generate_code(prompt, system_prompt, temperature)
 
     def generate_code_with_context(self, prompt: str, exploration_data: dict) -> str:

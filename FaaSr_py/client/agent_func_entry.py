@@ -159,6 +159,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
                 "sample": sample,
             }
 
+        logger.info(f"IO agent file inventory: {list(file_metadata.keys())}")
         return {"selected_uris": selected_uris, "file_metadata": file_metadata}
 
     def _node_coding_agent(state: AgentGraphState) -> Dict[str, Any]:
@@ -210,15 +211,23 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             f"Output directory contents:\n{output_summary}"
         )
         raw = generator.generate_text(eval_prompt, system_prompt, temperature=0.6)
-        decision_data = _extract_json(raw) or {}
+        logger.debug(f"Eval LLM raw response:\n{raw}")
+        parsed = _extract_json(raw)
+        if parsed is None:
+            logger.warning(f"Eval agent: JSON extraction failed on raw response: {raw[:500]}")
+        decision_data = parsed or {}
         decision = decision_data.get("decision", "continue")
         reasoning = decision_data.get("reasoning", "")
         file_descriptions = decision_data.get("file_descriptions", {})
 
+        logger.info(f"Eval decision: {decision} | reasoning: {reasoning}")
+        logger.info(f"Output summary:\n{output_summary}")
+        logger.debug(f"File descriptions: {file_descriptions}")
+
         # Enforce max 1 loopback
         if decision == "loop_back" and loop_count >= 1:
-            logger.warning("Max loopbacks reached — returning failure")
-            faasr_exit(error=True)
+            logger.warning(f"Max loopbacks reached — last reasoning: {reasoning}")
+            faasr_exit(error=True, message="Max loopbacks reached — agent could not produce valid outputs")
 
         new_loop_count = loop_count + (1 if decision == "loop_back" else 0)
 
@@ -315,8 +324,14 @@ def _select_files(
 
     raw = generator.generate_text(selection_prompt, system_prompt, temperature=0.2)
     data = _extract_json(raw) or {}
+    logger.debug(f"IO selection rationale: {data.get('rationale', '')}")
     # Validate returned URIs against the known set to prevent hallucination
-    uris = [u for u in data.get("uris", []) if u in valid_uris]
+    all_returned = data.get("uris", [])
+    dropped = [u for u in all_returned if u not in valid_uris]
+    if dropped:
+        logger.warning(f"IO agent dropped {len(dropped)} hallucinated URIs: {dropped}")
+    uris = [u for u in all_returned if u in valid_uris]
+    logger.info(f"IO agent selected URIs: {uris}")
     return uris[:10]
 
 

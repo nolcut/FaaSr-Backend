@@ -291,7 +291,9 @@ def main():
         exec(code, namespace)
         write_result(True)
     except Exception:
-        write_result(False, traceback.format_exc())
+        tb = traceback.format_exc()
+        _faasr_log(f"Code execution failed:\n{tb}")
+        write_result(False, tb)
         sys.exit(1)
 
 
