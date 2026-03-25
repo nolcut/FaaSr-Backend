@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 REGISTRY_PREFIX = "registry/"
 
 
-def _action_registry_key(action_name: str) -> str:
-    return f"{REGISTRY_PREFIX}{action_name}.json"
+def _action_registry_key(invocation_id: str, action_name: str) -> str:
+    return f"{REGISTRY_PREFIX}{invocation_id}/{action_name}.json"
 
 
 def _get_s3_client(faasr_payload, server_name=""):
@@ -45,7 +45,8 @@ def _get_s3_client(faasr_payload, server_name=""):
 
 def _read_action_registry(faasr_payload, action_name: str) -> list:
     """Read a single action's registry file. Returns [] if not found."""
-    key = _action_registry_key(action_name)
+    invocation_id = faasr_payload.get("InvocationID", "")
+    key = _action_registry_key(invocation_id, action_name)
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
         if not path.exists():
@@ -70,7 +71,8 @@ def _read_action_registry(faasr_payload, action_name: str) -> list:
 
 def _write_action_registry(faasr_payload, action_name: str, entries: list):
     """Write entries to an action-specific registry file."""
-    key = _action_registry_key(action_name)
+    invocation_id = faasr_payload.get("InvocationID", "")
+    key = _action_registry_key(invocation_id, action_name)
     body = json.dumps(entries, indent=2).encode("utf-8")
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
@@ -82,20 +84,23 @@ def _write_action_registry(faasr_payload, action_name: str, entries: list):
 
 
 def _list_registry_action_names(faasr_payload) -> list:
-    """Return all action names that have a registry file."""
+    """Return all action names that have a registry file for the current invocation."""
+    invocation_id = faasr_payload.get("InvocationID", "")
+    prefix = f"{REGISTRY_PREFIX}{invocation_id}/" if invocation_id else REGISTRY_PREFIX
     if global_config.USE_LOCAL_FILE_SYSTEM:
-        base = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / REGISTRY_PREFIX.rstrip("/")
+        base = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / prefix.rstrip("/")
         if not base.exists():
             return []
-        return [p.stem for p in base.glob("*.json")]
+        return [p.stem for p in base.glob("*.json") if p.stem != "global"]
     try:
         s3_client, target_s3 = _get_s3_client(faasr_payload)
         paginator = s3_client.get_paginator("list_objects_v2")
         names = []
-        for page in paginator.paginate(Bucket=target_s3["Bucket"], Prefix=REGISTRY_PREFIX):
+        for page in paginator.paginate(Bucket=target_s3["Bucket"], Prefix=prefix):
             for obj in page.get("Contents", []):
                 name = Path(obj["Key"]).stem
-                names.append(name)
+                if name != "global":
+                    names.append(name)
         return names
     except Exception as e:
         logger.warning(f"Could not list registry files: {e}")

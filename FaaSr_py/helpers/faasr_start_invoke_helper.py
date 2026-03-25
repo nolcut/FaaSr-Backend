@@ -404,12 +404,11 @@ def faasr_func_dependancy_install(faasr_source, action):
             # copy local files to /tmp/functions/{InvocationID}
             copy_local_files(faasr_source, local_gits)
 
-    if "PyPIPackageDownloads" in faasr_source and func_type == "Python":
-        if "PyPIPackageDownloads" in faasr_source and func_type == "Python":
-            pypi_packages = faasr_source["PyPIPackageDownloads"].get(func_name)
-            if pypi_packages:
-                for package in pypi_packages:
-                    faasr_pip_install(package)
+    if "PyPIPackageDownloads" in faasr_source and func_type in ("Python", "Agent"):
+        pypi_packages = faasr_source["PyPIPackageDownloads"].get(func_name)
+        if pypi_packages:
+            for package in pypi_packages:
+                faasr_pip_install(package)
 
     elif "FunctionCRANPackage" in faasr_source and func_type == "R":
         if "FunctionCRANPackage" in faasr_source:
@@ -429,8 +428,8 @@ def faasr_func_dependancy_install(faasr_source, action):
         if func_name in faasr_source["FunctionGitHubPackage"]:
             gh_packages = faasr_source["FunctionGitHubPackage"].get(func_name)
             if gh_packages:
-                if func_type == "Python":
-                    faasr_install_git_packages(gh_packages, func_type)
+                if func_type in ("Python", "Agent"):
+                    faasr_install_git_packages(gh_packages, "Python")
                 elif func_type == "R":
                     faasr_install_git_packages(gh_packages, func_type, "/tmp/Rlibs")
                 else:

@@ -252,6 +252,7 @@ def main():
         _faasr_log(f"Warning: could not save generated code: {e}")
 
     def _faasr_install(package_name: str):
+        import importlib
         import subprocess
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", package_name],
@@ -260,6 +261,7 @@ def main():
         )
         if result.returncode != 0:
             raise RuntimeError(f"pip install {package_name!r} failed:\n{result.stderr}")
+        importlib.invalidate_caches()
         _faasr_log(f"Installed package: {package_name}")
 
     # Build execution namespace
