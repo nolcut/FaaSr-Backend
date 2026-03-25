@@ -382,7 +382,9 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
     """
     Return a short representative sample of the file's content,
     guided by the sidecar schema when available.
+    Limits sample to 300 chars to reduce payload for large files.
     """
+    max_sample_chars = 300
     try:
         if local_path.endswith(".json"):
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
@@ -390,18 +392,21 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
             if isinstance(data, dict):
                 # Use sidecar keys to pick specific fields if available
                 keys = sidecar.get("properties", {}).keys() if sidecar else data.keys()
-                sample = {k: data[k] for k in list(keys)[:5] if k in data}
-                return json.dumps(sample, indent=2)
-            if isinstance(data, list):
-                return json.dumps(data[:3], indent=2)
-            return str(data)[:500]
+                sample = {k: data[k] for k in list(keys)[:3] if k in data}  # reduced from 5 to 3 fields
+                result = json.dumps(sample, indent=2)
+            elif isinstance(data, list):
+                result = json.dumps(data[:2], indent=2)  # reduced from 3 to 2 items
+            else:
+                result = str(data)[:max_sample_chars]
+            return result[:max_sample_chars]
 
         if local_path.endswith(".csv"):
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
                 reader = csv.reader(f)
                 rows = [next(reader, [])]  # header
-                rows += [next(reader, []) for _ in range(3)]
-            return "\n".join(",".join(row) for row in rows if row)
+                rows += [next(reader, []) for _ in range(2)]  # reduced from 3 to 2 data rows
+            result = "\n".join(",".join(row) for row in rows if row)
+            return result[:max_sample_chars]
 
         # Binary/image files — no sampling
         return ""

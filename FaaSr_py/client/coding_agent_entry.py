@@ -111,11 +111,22 @@ def _build_system_prompt(context: dict) -> str:
     file_summary = ""
     if file_metadata:
         parts = []
+        max_sample_chars = 500  # Truncate samples to reduce payload
+        max_schema_chars = 300  # Truncate schemas to reduce payload
         for uri, meta in file_metadata.items():
             local_path = meta.get("local_path", "")
             sidecar = meta.get("sidecar", {})
             sample = meta.get("sample", "")
             sidecar_str = json.dumps(sidecar, indent=2) if sidecar else "(no schema)"
+
+            # Truncate schema if too large
+            if len(sidecar_str) > max_schema_chars:
+                sidecar_str = sidecar_str[:max_schema_chars] + "\n... (schema truncated)"
+
+            # Truncate sample if too large
+            if len(sample) > max_sample_chars:
+                sample = sample[:max_sample_chars] + f"\n... (truncated, full file at {local_path})"
+
             parts.append(
                 f"File: {uri}\n  Local path: {local_path}\n"
                 f"  Schema: {sidecar_str}\n  Sample:\n{sample}"
