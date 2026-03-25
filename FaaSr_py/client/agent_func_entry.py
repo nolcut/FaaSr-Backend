@@ -170,11 +170,17 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         loop_count = state.get("loop_count", 0)
         if eval_reasoning:
             logger.info(f"Passing eval feedback to coding agent (loop {loop_count}): {eval_reasoning}")
+
+        # Only pass registry entries for files that were actually selected (to reduce payload)
+        selected_uris = set(state.get("selected_uris", []))
+        all_registry_entries = state.get("registry_entries", [])
+        relevant_entries = [e for e in all_registry_entries if e.get("file_uri") in selected_uris]
+
         context = {
             "prompt": state.get("prompt", ""),
             "function_invoke": state.get("function_invoke", ""),
             "workflow_spec": state.get("workflow_spec", {}),
-            "registry_entries": state.get("registry_entries", []),
+            "registry_entries": relevant_entries,
             "file_metadata": state.get("file_metadata", {}),
             "input_dir": INPUT_DIR,
             "output_dir": OUTPUT_DIR,
@@ -382,9 +388,9 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
     """
     Return a short representative sample of the file's content,
     guided by the sidecar schema when available.
-    Limits sample to 300 chars to reduce payload for large files.
+    Limits sample to 1000 chars to balance context and payload size.
     """
-    max_sample_chars = 300
+    max_sample_chars = 1000
     try:
         if local_path.endswith(".json"):
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
@@ -392,10 +398,10 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
             if isinstance(data, dict):
                 # Use sidecar keys to pick specific fields if available
                 keys = sidecar.get("properties", {}).keys() if sidecar else data.keys()
-                sample = {k: data[k] for k in list(keys)[:3] if k in data}  # reduced from 5 to 3 fields
+                sample = {k: data[k] for k in list(keys)[:5] if k in data}
                 result = json.dumps(sample, indent=2)
             elif isinstance(data, list):
-                result = json.dumps(data[:2], indent=2)  # reduced from 3 to 2 items
+                result = json.dumps(data[:3], indent=2)
             else:
                 result = str(data)[:max_sample_chars]
             return result[:max_sample_chars]
@@ -404,7 +410,7 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
                 reader = csv.reader(f)
                 rows = [next(reader, [])]  # header
-                rows += [next(reader, []) for _ in range(2)]  # reduced from 3 to 2 data rows
+                rows += [next(reader, []) for _ in range(3)]
             result = "\n".join(",".join(row) for row in rows if row)
             return result[:max_sample_chars]
 
@@ -447,24 +453,30 @@ def _summarise_output_dir() -> str:
 
 
 def _upload_outputs(function_invoke: str, file_descriptions: dict = None):
-    """Upload all files in OUTPUT_DIR to S3 via agent_put_file (IsAgentRequest=True)."""
+    """Upload all files in OUTPUT_DIR (including subdirectories) to S3 via agent_put_file."""
     output_path = Path(OUTPUT_DIR)
     if not output_path.exists():
         logger.warning("Output directory does not exist — nothing to upload")
         return
     remote_folder = f"{function_invoke}_outputs"
     descriptions = file_descriptions or {}
-    for file in output_path.iterdir():
+
+    # Recursively find all files in output_dir and subdirectories
+    for file in output_path.rglob("*"):
         if file.is_file():
+            # Preserve relative directory structure in remote folder
+            rel_parent = file.relative_to(output_path).parent
+            remote_subfolder = f"{remote_folder}/{rel_parent}" if str(rel_parent) != "." else remote_folder
+
             try:
                 agent_put_file(
                     local_file=file.name,
-                    local_folder=str(output_path),
+                    local_folder=str(file.parent),
                     remote_file=file.name,
-                    remote_folder=remote_folder,
+                    remote_folder=remote_subfolder,
                     description=descriptions.get(file.name, ""),
                 )
-                logger.info(f"Uploaded output: {remote_folder}/{file.name}")
+                logger.info(f"Uploaded output: {remote_subfolder}/{file.name}")
             except Exception as e:
                 logger.error(f"Failed to upload {file.name}: {e}")
 
