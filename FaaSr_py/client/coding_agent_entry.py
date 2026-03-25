@@ -100,6 +100,8 @@ def _build_system_prompt(context: dict) -> str:
     workflow_spec = context.get("workflow_spec", {})
     input_dir = context.get("input_dir", "/tmp/agent/input")
     output_dir = context.get("output_dir", "/tmp/agent/output")
+    eval_feedback = context.get("eval_feedback", "")
+    loop_count = context.get("loop_count", 0)
 
     registry_summary = ""
     if registry_entries:
@@ -134,8 +136,18 @@ AVAILABLE PYTHON PACKAGES (pre-installed, import directly):
 - pydantic
 Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are also available."""
 
-    return f"""You are a FaaSr coding agent. You process data files and write results to disk.
+    retry_block = ""
+    if eval_feedback and loop_count > 0:
+        retry_block = (
+            f"\n\nPREVIOUS ATTEMPT FAILED (attempt {loop_count}).\n"
+            f"Evaluator feedback: {eval_feedback}\n"
+            f"You MUST fix the issue described above. Do not repeat the same mistake.\n"
+            f"If the failure was a missing package, call faasr_install(\"package_name\") "
+            f"at the top of your code BEFORE any import that uses it.\n"
+        )
 
+    return f"""You are a FaaSr coding agent. You process data files and write results to disk.
+{retry_block}
 CRITICAL OUTPUT RULES:
 - Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
 - Start immediately with import statements or code, no pretext

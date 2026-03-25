@@ -165,6 +165,10 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
     def _node_coding_agent(state: AgentGraphState) -> Dict[str, Any]:
         logger.info("Node: coding_agent")
         os.makedirs(OUTPUT_DIR, exist_ok=True)
+        eval_reasoning = state.get("eval_reasoning", "")
+        loop_count = state.get("loop_count", 0)
+        if eval_reasoning:
+            logger.info(f"Passing eval feedback to coding agent (loop {loop_count}): {eval_reasoning}")
         context = {
             "prompt": state.get("prompt", ""),
             "function_invoke": state.get("function_invoke", ""),
@@ -177,6 +181,8 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "invocation_id": faasr.get("InvocationID", ""),
             "rank": _faasr_rank(faasr_payload=faasr),
             "temperature": 0.2,
+            "eval_feedback": eval_reasoning,
+            "loop_count": loop_count,
         }
         result = get_coding_backend().run(context)
         logger.info(f"Coding agent finished: success={result.success}")
