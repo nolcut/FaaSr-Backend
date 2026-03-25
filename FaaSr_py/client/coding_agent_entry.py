@@ -232,17 +232,30 @@ def main():
         system_prompt = _build_system_prompt(context)
         prompt = context.get("prompt", "")
 
-        code = generator.generate_text(prompt, system_prompt, temperature=context.get("temperature", 0.2))
+        def _generate_and_clean(gen_prompt):
+            raw = generator.generate_text(gen_prompt, system_prompt, temperature=context.get("temperature", 0.2))
+            if "```python" in raw:
+                raw = raw.replace("```python\n", "").replace("\n```python", "")
+            if "```" in raw:
+                if raw.strip().startswith("```"):
+                    raw = raw[raw.index("```") + 3:]
+                if raw.strip().endswith("```"):
+                    raw = raw[:raw.rindex("```")]
+            return raw.strip()
 
-        # Clean up markdown formatting
-        if "```python" in code:
-            code = code.replace("```python\n", "").replace("\n```python", "")
-        if "```" in code:
-            if code.strip().startswith("```"):
-                code = code[code.index("```") + 3:]
-            if code.strip().endswith("```"):
-                code = code[:code.rindex("```")]
-        code = code.strip()
+        code = _generate_and_clean(prompt)
+        for attempt in range(1, 3):
+            try:
+                compile(code, "<generated>", "exec")
+                break
+            except SyntaxError as e:
+                if attempt == 2:
+                    write_result(False, f"Syntax error after 3 attempts: {e}")
+                    sys.exit(1)
+                code = _generate_and_clean(
+                    f"{prompt}\n\nYour previous response had a syntax error: {e}\n"
+                    f"Return corrected Python only."
+                )
 
         if not code:
             write_result(False, "LLM returned empty code")
