@@ -187,6 +187,22 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         }
         result = get_coding_backend().run(context)
         logger.info(f"Coding agent finished: success={result.success}")
+
+        if not result.success:
+            function_invoke = state.get("function_invoke", "coding_agent")
+            code_path = Path(OUTPUT_DIR) / f"{function_invoke}.py"
+            if code_path.exists():
+                try:
+                    agent_put_file(
+                        local_file=code_path.name,
+                        local_folder=str(code_path.parent),
+                        remote_file=f"failed_{code_path.name}",
+                        remote_folder=f"{function_invoke}_outputs",
+                    )
+                    logger.info(f"Uploaded failed code as failed_{code_path.name}")
+                except Exception as e:
+                    logger.warning(f"Could not upload failed code: {e}")
+
         return {"coding_result": {"success": result.success, "exception": result.exception}}
 
     def _node_eval_agent(state: AgentGraphState) -> Dict[str, Any]:
@@ -253,7 +269,8 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         # Enforce max 1 loopback
         if decision == "loop_back" and loop_count >= 1:
             logger.warning(f"Max loopbacks reached — last reasoning: {reasoning}")
-            faasr_exit(error=True, message="Max loopbacks reached — agent could not produce valid outputs")
+            decision = "abort"
+            reasoning = f"Max loopbacks reached — {reasoning}"
 
         new_loop_count = loop_count + (1 if decision == "loop_back" else 0)
 

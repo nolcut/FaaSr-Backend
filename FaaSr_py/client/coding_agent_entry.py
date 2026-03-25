@@ -150,8 +150,12 @@ Commonly needed geo/science packages (NOT pre-installed — you MUST call faasr_
         )
 
     return f"""You are a FaaSr coding agent. You process data files and write results to disk.
-{retry_block}
-PACKAGE INSTALLATION RULES — READ FIRST:
+
+CRITICAL OUTPUT RULES:
+- Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
+- Start immediately with import statements or code, no pretext
+
+PACKAGE INSTALLATION RULES (IMPORTANT):
 For every package NOT in the pre-installed list below, you MUST call faasr_install() on its own
 line immediately before the import. Do this unconditionally — even if you think the package
 might already be installed. Never import a non-pre-installed package without calling
@@ -162,12 +166,10 @@ faasr_install() first. Example:
     faasr_install("rioxarray")
     import rioxarray
 
-CRITICAL OUTPUT RULES:
-- Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
-- Start immediately with import statements or code, no pretext
+{retry_block}
 
 CRITICAL RUNTIME RULES:
-- DO NOT import or reference any 'faasr' module
+- DO NOT use 'faasr' as a variable name or import any 'faasr' module — 'faasr' does not exist in this environment
 - Use ONLY the provided functions (faasr_log, faasr_invocation_id, faasr_rank) for meta-context
 - DO NOT perform any S3 operations — no faasr_put_file, no faasr_get_file
 - Read inputs from: {input_dir}
@@ -333,19 +335,6 @@ def main():
     except Exception:
         tb = traceback.format_exc()
         _faasr_log(f"Code execution failed:\n{tb}")
-        if code_path.exists():
-            try:
-                sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-                from FaaSr_py.client.agent_stubs import agent_put_file
-                agent_put_file(
-                    local_file=code_path.name,
-                    local_folder=str(code_path.parent),
-                    remote_file=f"failed_{code_path.name}",
-                    remote_folder=f"{function_invoke}_outputs",
-                )
-                _faasr_log(f"Uploaded failed code as failed_{code_path.name}")
-            except Exception as upload_err:
-                _faasr_log(f"Could not upload failed code: {upload_err}")
         write_result(False, tb)
         sys.exit(1)
 
