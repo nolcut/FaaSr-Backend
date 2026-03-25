@@ -1,4 +1,5 @@
 import csv
+import datetime
 import json
 import logging
 import os
@@ -214,7 +215,9 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "Provide a file_descriptions entry for every output file listed.\n"
             "Do not include any text outside the JSON."
         )
+        today_str = datetime.date.today().isoformat()
         eval_prompt = (
+            f"Today's date: {today_str}\n\n"
             f"User task: {prompt}\n\n"
             f"Coding agent success: {coding_result.get('success')}\n"
             f"Exception: {coding_result.get('exception') or 'none'}\n\n"
