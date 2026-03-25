@@ -217,13 +217,24 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "Provide a file_descriptions entry for every output file listed.\n"
             "Do not include any text outside the JSON."
         )
+        coding_log = ""
+        _log_file = Path("/tmp/agent/logs/coding_agent.log")
+        if _log_file.exists():
+            try:
+                log_text = _log_file.read_text()
+                if log_text:
+                    coding_log = f"\nCoding agent log:\n{log_text}\n"
+            except Exception:
+                pass
+
         today_str = datetime.date.today().isoformat()
         eval_prompt = (
             f"Today's date: {today_str}\n\n"
             f"User task: {prompt}\n\n"
             f"Coding agent success: {coding_result.get('success')}\n"
-            f"Exception: {coding_result.get('exception') or 'none'}\n\n"
-            f"Output directory contents:\n{output_summary}"
+            f"Exception: {coding_result.get('exception') or 'none'}\n"
+            f"{coding_log}"
+            f"\nOutput directory contents:\n{output_summary}"
         )
         raw = generator.generate_text(eval_prompt, system_prompt, temperature=0.6)
         logger.debug(f"Eval LLM raw response:\n{raw}")
