@@ -207,6 +207,10 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "- continue: outputs look correct and complete\n"
             "- loop_back: outputs are wrong or missing but the task is recoverable\n"
             "- abort: unrecoverable failure\n"
+            "IMPORTANT: The coding agent CAN install missing packages at runtime using faasr_install(). "
+            "A ModuleNotFoundError or missing package error is NOT an unrecoverable environment issue — "
+            "it means the agent forgot to call faasr_install() before importing. "
+            "Always decide 'loop_back' for missing package errors so the agent can retry.\n"
             "Provide a file_descriptions entry for every output file listed.\n"
             "Do not include any text outside the JSON."
         )

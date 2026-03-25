@@ -134,7 +134,10 @@ AVAILABLE PYTHON PACKAGES (pre-installed, import directly):
 - requests
 - PyYAML (import yaml)
 - pydantic
-Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are also available."""
+Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are also available.
+
+Commonly needed geo/science packages (NOT pre-installed — you MUST call faasr_install first):
+- geopandas, shapely, rioxarray, pyproj, fiona, earthaccess, pystac-client"""
 
     retry_block = ""
     if eval_feedback and loop_count > 0:
@@ -148,6 +151,17 @@ Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are a
 
     return f"""You are a FaaSr coding agent. You process data files and write results to disk.
 {retry_block}
+PACKAGE INSTALLATION RULES — READ FIRST:
+For every package NOT in the pre-installed list below, you MUST call faasr_install() on its own
+line immediately before the import. Do this unconditionally — even if you think the package
+might already be installed. Never import a non-pre-installed package without calling
+faasr_install() first. Example:
+
+    faasr_install("geopandas")
+    import geopandas as gpd
+    faasr_install("rioxarray")
+    import rioxarray
+
 CRITICAL OUTPUT RULES:
 - Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
 - Start immediately with import statements or code, no pretext
@@ -160,7 +174,6 @@ CRITICAL RUNTIME RULES:
 - Write ALL outputs to: {output_dir} (JSON or image files: .png, .jpg, .jpeg)
 - Use the input_dir and output_dir variables injected into the runtime
 - Never hardcode run IDs or invocation IDs — use faasr_invocation_id() if needed
-- If you need a package not listed below, call faasr_install("package_name") before importing it
 
 AVAILABLE FUNCTIONS (injected into runtime, do not import):
 - faasr_log(log_message): Append a message to the local log file (uploaded to S3 by the eval agent)
@@ -307,6 +320,19 @@ def main():
     except Exception:
         tb = traceback.format_exc()
         _faasr_log(f"Code execution failed:\n{tb}")
+        if code_path.exists():
+            try:
+                sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+                from FaaSr_py.client.agent_stubs import agent_put_file
+                agent_put_file(
+                    local_file=code_path.name,
+                    local_folder=str(code_path.parent),
+                    remote_file=f"failed_{code_path.name}",
+                    remote_folder=f"{function_invoke}_outputs",
+                )
+                _faasr_log(f"Uploaded failed code as failed_{code_path.name}")
+            except Exception as upload_err:
+                _faasr_log(f"Could not upload failed code: {upload_err}")
         write_result(False, tb)
         sys.exit(1)
 

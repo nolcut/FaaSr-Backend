@@ -408,6 +408,7 @@ def faasr_func_dependancy_install(faasr_source, action):
         pypi_packages = faasr_source["PyPIPackageDownloads"].get(func_name)
         if pypi_packages:
             for package in pypi_packages:
+                logger.debug(f"Installing Python package: {package}")
                 faasr_pip_install(package)
 
     elif "FunctionCRANPackage" in faasr_source and func_type == "R":
