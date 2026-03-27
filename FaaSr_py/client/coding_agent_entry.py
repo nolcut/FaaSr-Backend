@@ -282,8 +282,10 @@ def main():
     output_dir = context.get("output_dir", "/tmp/agent/output")
     input_dir = context.get("input_dir", "/tmp/agent/input")
     logs_dir = context.get("logs_dir", "/tmp/agent/logs")
+    code_dir = context.get("code_dir", "/tmp/agent/code")
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     Path(logs_dir).mkdir(parents=True, exist_ok=True)
+    Path(code_dir).mkdir(parents=True, exist_ok=True)
 
     _invocation_id = context.get("invocation_id", "")
     _rank = context.get("rank", {})
@@ -293,12 +295,12 @@ def main():
         with open(_log_path, "a") as _f:
             _f.write(str(msg) + "\n")
 
-    # Save generated code to output dir for upload
+    # Save generated code to dedicated code dir (separate from output data)
     function_invoke = context.get("function_invoke", "coding_agent")
-    code_path = Path(output_dir) / f"{function_invoke}.py"
+    code_path = Path(code_dir) / f"{function_invoke}.py"
     try:
         code_path.write_text(code)
-        _faasr_log(f"Saved generated code to {code_path.name}")
+        _faasr_log(f"Saved generated code to {code_path}")
     except Exception as e:
         _faasr_log(f"Warning: could not save generated code: {e}")
 

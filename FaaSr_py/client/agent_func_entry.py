@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 INPUT_DIR = "/tmp/agent/input"
 OUTPUT_DIR = "/tmp/agent/output"
+CODE_DIR = "/tmp/agent/code"
 
 
 def _run_prefix(faasr) -> str:
@@ -191,6 +192,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "file_metadata": state.get("file_metadata", {}),
             "input_dir": INPUT_DIR,
             "output_dir": OUTPUT_DIR,
+            "code_dir": CODE_DIR,
             "logs_dir": "/tmp/agent/logs",
             "invocation_id": faasr.get("InvocationID", ""),
             "rank": _faasr_rank(faasr_payload=faasr),
@@ -203,7 +205,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
 
         if not result.success:
             function_invoke = state.get("function_invoke", "coding_agent")
-            code_path = Path(OUTPUT_DIR) / f"{function_invoke}.py"
+            code_path = Path(CODE_DIR) / f"{function_invoke}.py"
             if code_path.exists():
                 try:
                     agent_put_file(
@@ -292,6 +294,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             function_invoke = state.get("function_invoke", "unknown")
             _write_manifest(faasr, state, file_descriptions)
             _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions)
+            _upload_generated_code(function_invoke, _run_prefix(faasr))
 
         # On loop_back: clear working dirs for retry
         if decision == "loop_back":
@@ -538,6 +541,25 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
                 logger.error(f"Failed to upload {file.name}: {e}")
 
     _log_generated_code_to_s3(remote_folder, run_prefix)
+
+
+def _upload_generated_code(function_invoke: str, run_prefix: str):
+    """Upload the generated code file from CODE_DIR to S3 for TUI display."""
+    code_path = Path(CODE_DIR) / f"{function_invoke}.py"
+    if not code_path.exists():
+        logger.warning(f"Generated code file not found: {code_path}")
+        return
+    remote_folder = f"{run_prefix}/{function_invoke}_outputs"
+    try:
+        agent_put_file(
+            local_file=code_path.name,
+            local_folder=str(code_path.parent),
+            remote_file=code_path.name,
+            remote_folder=remote_folder,
+        )
+        logger.info(f"Uploaded generated code: {remote_folder}/{code_path.name}")
+    except Exception as e:
+        logger.warning(f"Could not upload generated code: {e}")
 
 
 def _clear_dir(path: str):
