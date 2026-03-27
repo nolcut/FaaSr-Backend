@@ -26,6 +26,13 @@ INPUT_DIR = "/tmp/agent/input"
 OUTPUT_DIR = "/tmp/agent/output"
 
 
+def _run_prefix(faasr) -> str:
+    """Build a run-scoped S3 prefix: {workflow_name}/{invocation_id}"""
+    wf = faasr.get("WorkflowName", "workflow")
+    inv = faasr.get("InvocationID", "unknown")
+    return f"{wf}/{inv}"
+
+
 class AgentGraphState(TypedDict, total=False):
     prompt: str
     function_invoke: str            # = faasr["FunctionInvoke"]
@@ -203,7 +210,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
                         local_file=code_path.name,
                         local_folder=str(code_path.parent),
                         remote_file=f"failed_{code_path.name}",
-                        remote_folder=f"{function_invoke}_outputs",
+                        remote_folder=f"{_run_prefix(faasr)}/{function_invoke}_outputs",
                     )
                     logger.info(f"Uploaded failed code as failed_{code_path.name}")
                 except Exception as e:
@@ -280,9 +287,11 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
 
         new_loop_count = loop_count + (1 if decision == "loop_back" else 0)
 
-        # On continue: upload outputs
+        # On continue: write manifest then upload outputs
         if decision == "continue":
-            _upload_outputs(state.get("function_invoke", "unknown"), file_descriptions)
+            function_invoke = state.get("function_invoke", "unknown")
+            _write_manifest(faasr, state, file_descriptions)
+            _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions)
 
         # On loop_back: clear working dirs for retry
         if decision == "loop_back":
@@ -298,7 +307,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
                     local_file=_log_file.name,
                     local_folder=str(_log_file.parent),
                     remote_file=f"{state.get('function_invoke', 'agent')}_{invocation_id}_coding_agent.log",
-                    remote_folder=f"{state.get('function_invoke', 'agent')}_logs",
+                    remote_folder=f"{_run_prefix(faasr)}/{state.get('function_invoke', 'agent')}_logs",
                 )
             except Exception as e:
                 logger.warning(f"Could not upload coding agent log: {e}")
@@ -452,13 +461,61 @@ def _summarise_output_dir() -> str:
     return "\n".join(lines)
 
 
-def _upload_outputs(function_invoke: str, file_descriptions: dict = None):
+def _write_manifest(faasr, state: Dict, file_descriptions: dict) -> None:
+    """Write _manifest.json to OUTPUT_DIR recording I/O for static export."""
+    try:
+        function_invoke = state.get("function_invoke", "unknown")
+        selected_uris = state.get("selected_uris", [])
+        file_metadata = state.get("file_metadata", {})
+
+        # Build inputs list from IO agent's selected files
+        inputs = []
+        for uri in selected_uris:
+            parts = uri.rsplit("/", 1)
+            remote_folder = parts[0] if len(parts) == 2 else "."
+            remote_file = parts[-1]
+            meta = file_metadata.get(uri, {})
+            local_path = meta.get("local_path", "")
+            local_file = Path(local_path).name if local_path else remote_file
+            inputs.append({
+                "uri": uri,
+                "remote_folder": remote_folder,
+                "remote_file": remote_file,
+                "local_file": local_file,
+            })
+
+        # Build outputs list from OUTPUT_DIR contents
+        outputs = []
+        output_path = Path(OUTPUT_DIR)
+        if output_path.exists():
+            for f in output_path.rglob("*"):
+                if f.is_file() and f.name != "_manifest.json":
+                    rel = str(f.relative_to(output_path))
+                    outputs.append({
+                        "local_file": rel,
+                        "description": file_descriptions.get(f.name, ""),
+                    })
+
+        # Packages from workflow payload
+        packages = faasr.get("PyPIPackageDownloads", {}).get(function_invoke, [])
+
+        manifest = {"inputs": inputs, "outputs": outputs, "packages": packages}
+        manifest_path = output_path / "_manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        logger.info(f"Wrote I/O manifest: {len(inputs)} inputs, {len(outputs)} outputs")
+    except Exception as e:
+        logger.warning(f"Could not write manifest: {e}")
+
+
+def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: dict = None):
     """Upload all files in OUTPUT_DIR (including subdirectories) to S3 via agent_put_file."""
     output_path = Path(OUTPUT_DIR)
     if not output_path.exists():
         logger.warning("Output directory does not exist — nothing to upload")
         return
-    remote_folder = f"{function_invoke}_outputs"
+    remote_folder = f"{run_prefix}/{function_invoke}_outputs"
     descriptions = file_descriptions or {}
 
     # Recursively find all files in output_dir and subdirectories
@@ -480,7 +537,7 @@ def _upload_outputs(function_invoke: str, file_descriptions: dict = None):
             except Exception as e:
                 logger.error(f"Failed to upload {file.name}: {e}")
 
-    _log_generated_code_to_s3(remote_folder)
+    _log_generated_code_to_s3(remote_folder, run_prefix)
 
 
 def _clear_dir(path: str):
@@ -519,7 +576,7 @@ def _checkpoint_state_to_s3(faasr):
             local_file=Path(marker).name,
             remote_file=Path(marker).name,
             local_folder="/tmp",
-            remote_folder=f"{function_invoke}_checkpoints",
+            remote_folder=f"{_run_prefix(faasr)}/{function_invoke}_checkpoints",
         )
     except Exception as e:
         logger.warning(f"Could not checkpoint to S3: {e}")
@@ -544,7 +601,7 @@ def _extract_json(text: str) -> Dict[str, Any] | None:
     return None
 
 
-def _log_generated_code_to_s3(remote_folder: str):
+def _log_generated_code_to_s3(remote_folder: str, run_prefix: str):
     """Upload an audit marker noting this agent run produced outputs."""
     try:
         import time
@@ -559,7 +616,7 @@ def _log_generated_code_to_s3(remote_folder: str):
             local_file=marker_name,
             local_folder="/tmp",
             remote_file=marker_name,
-            remote_folder="agent_audit",
+            remote_folder=f"{run_prefix}/agent_audit",
         )
     except Exception as e:
         logger.warning(f"Could not log audit marker to S3: {e}")
