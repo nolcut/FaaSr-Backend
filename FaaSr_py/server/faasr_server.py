@@ -297,6 +297,15 @@ def _handle_agent_post_put(faasr_payload, args):
         faasr_payload: FaaSr payload dict
         args: put_file Arguments dict
     """
+    remote_file = args.get("remote_file", "")
+    function_invoke = faasr_payload.get("FunctionInvoke", "")
+    if (
+        remote_file == "manifest.json"
+        or remote_file.endswith("_coding_agent.log")
+        or remote_file == f"{function_invoke}.py"
+    ):
+        return
+
     local_path = str(Path(args.get("local_folder", ".")) / args.get("local_file", ""))
     schema_uri = ""
 
