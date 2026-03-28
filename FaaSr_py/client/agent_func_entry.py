@@ -28,6 +28,10 @@ CODE_DIR = "/tmp/agent/code"
 LOGS_DIR = "/tmp/agent/logs"
 INSTALLED_PACKAGES_FILE = "/tmp/agent/installed_packages.json"
 
+IO_TEMP = 0.0
+CODING_TEMP = 0.2
+EVALUATOR_TEMP = 0.0
+
 
 def _run_prefix(faasr) -> str:
     """Build a run-scoped S3 prefix: {workflow_name}/{invocation_id}"""
@@ -194,7 +198,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "output_dir": OUTPUT_DIR,
             "code_dir": CODE_DIR,
             "logs_dir": LOGS_DIR,
-            "temperature": 0.2,
+            "temperature": CODING_TEMP,
             "eval_feedback": eval_reasoning,
             "exception": state.get("coding_result", {}).get("exception", ""),
             "loop_count": loop_count,
@@ -257,7 +261,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             f"{coding_log}"
             f"\nOutput directory contents:\n{output_summary}"
         )
-        raw = generator.generate_text(eval_prompt, system_prompt, temperature=0.6)
+        raw = generator.generate_text(eval_prompt, system_prompt, temperature=EVALUATOR_TEMP)
         logger.debug(f"Eval LLM raw response:\n{raw}")
         parsed = _extract_json(raw)
         if parsed is None:
@@ -366,7 +370,7 @@ def _select_files(
         + "\n".join(f"- uri={e['uri']} name={e['name']}: {e['description']}" for e in visible_entries)
     )
 
-    raw = generator.generate_text(selection_prompt, system_prompt, temperature=0.2)
+    raw = generator.generate_text(selection_prompt, system_prompt, temperature=IO_TEMP)
     data = _extract_json(raw) or {}
     logger.debug(f"IO selection rationale: {data.get('rationale', '')}")
     # Validate returned URIs against the known set to prevent hallucination
