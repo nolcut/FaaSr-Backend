@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import boto3
 import botocore
@@ -152,6 +152,76 @@ def _write_global_registry(faasr_payload, invocation_id: str, entries: list):
     s3_client.put_object(Bucket=target_s3["Bucket"], Key=key, Body=body)
 
 
+def _is_glob_pattern(uri: str) -> bool:
+    """Return True if uri contains glob metacharacters."""
+    return any(c in uri for c in ("*", "?", "["))
+
+
+def _glob_prefix(pattern: str) -> str:
+    """Extract the S3 prefix (literal leading segments) from a glob pattern."""
+    segments = pattern.lstrip("/").split("/")
+    literal = []
+    for seg in segments:
+        if any(c in seg for c in ("*", "?", "[")):
+            break
+        literal.append(seg)
+    prefix = "/".join(literal)
+    return (prefix + "/") if prefix else ""
+
+
+def _expand_glob(faasr_payload, pattern: str) -> list:
+    """Expand a glob pattern to matching file URIs. Supports *, **, and ?."""
+    norm_pattern = pattern.lstrip("/")
+    if global_config.USE_LOCAL_FILE_SYSTEM:
+        base = Path(global_config.LOCAL_FILE_SYSTEM_DIR)
+        return [
+            str(p.relative_to(base)).replace("\\", "/")
+            for p in base.glob(norm_pattern)
+            if p.is_file()
+        ]
+    try:
+        s3_client, target_s3 = _get_s3_client(faasr_payload)
+        prefix = _glob_prefix(norm_pattern)
+        paginator = s3_client.get_paginator("list_objects_v2")
+        matched = []
+        for page in paginator.paginate(Bucket=target_s3["Bucket"], Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"].lstrip("/")
+                if PurePosixPath(key).full_match(norm_pattern):
+                    matched.append(key)
+        return matched
+    except Exception as e:
+        logger.warning(f"Could not expand glob pattern {pattern}: {e}")
+        return []
+
+
+def _expand_glob_dirs(faasr_payload, pattern: str) -> list:
+    """Expand a glob pattern to matching directory prefixes. Supports *, **, and ?."""
+    norm_pattern = pattern.lstrip("/").rstrip("/")
+    if global_config.USE_LOCAL_FILE_SYSTEM:
+        base = Path(global_config.LOCAL_FILE_SYSTEM_DIR)
+        return [
+            str(p.relative_to(base)).replace("\\", "/")
+            for p in base.glob(norm_pattern)
+            if p.is_dir()
+        ]
+    try:
+        s3_client, target_s3 = _get_s3_client(faasr_payload)
+        prefix = _glob_prefix(norm_pattern)
+        paginator = s3_client.get_paginator("list_objects_v2")
+        dirs = set()
+        for page in paginator.paginate(Bucket=target_s3["Bucket"], Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"].lstrip("/")
+                dir_part = "/".join(key.split("/")[:-1])
+                if dir_part and PurePosixPath(dir_part).full_match(norm_pattern):
+                    dirs.add(dir_part)
+        return sorted(dirs)
+    except Exception as e:
+        logger.warning(f"Could not expand glob dir pattern {pattern}: {e}")
+        return []
+
+
 def _list_files_in_folder(faasr_payload, folder: str) -> list:
     """Return all file URIs under a folder prefix (recursive), preserving original paths."""
     if global_config.USE_LOCAL_FILE_SYSTEM:
@@ -205,20 +275,41 @@ def init_immutable_registry(faasr_payload):
     entries = []
 
     for uri in global_files:
-        parts = uri.rsplit("/", 1)
-        folder, file = (parts[0], parts[1]) if len(parts) == 2 else ("", parts[0])
-        if faasr_file_exists(faasr_payload, folder, file):
-            entries.append(_make_global_entry(uri, invocation_id))
+        if _is_glob_pattern(uri):
+            matched = _expand_glob(faasr_payload, uri)
+            if not matched:
+                logger.warning(f"GlobalInputFile glob matched no files: {uri}")
+            for key in matched:
+                entries.append(_make_global_entry(key, invocation_id))
         else:
-            logger.warning(f"GlobalInputFile not found, skipping: {uri}")
+            parts = uri.rsplit("/", 1)
+            folder, file = (parts[0], parts[1]) if len(parts) == 2 else ("", parts[0])
+            if faasr_file_exists(faasr_payload, folder, file):
+                entries.append(_make_global_entry(uri, invocation_id))
+            else:
+                logger.warning(f"GlobalInputFile not found, skipping: {uri}")
 
     for folder in global_folders:
-        for uri in _list_files_in_folder(faasr_payload, folder):
-            entries.append(_make_global_entry(uri, invocation_id))
+        if _is_glob_pattern(folder):
+            matched_dirs = _expand_glob_dirs(faasr_payload, folder)
+            if not matched_dirs:
+                logger.warning(f"GlobalInputFolder glob matched no folders: {folder}")
+            for d in matched_dirs:
+                for uri in _list_files_in_folder(faasr_payload, d):
+                    entries.append(_make_global_entry(uri, invocation_id))
+        else:
+            for uri in _list_files_in_folder(faasr_payload, folder):
+                entries.append(_make_global_entry(uri, invocation_id))
 
     if entries:
-        _write_global_registry(faasr_payload, invocation_id, entries)
-        logger.info(f"Initialized global registry with {len(entries)} entries for invocation {invocation_id}")
+        seen = set()
+        deduped = []
+        for e in entries:
+            if e["file_uri"] not in seen:
+                seen.add(e["file_uri"])
+                deduped.append(e)
+        _write_global_registry(faasr_payload, invocation_id, deduped)
+        logger.info(f"Initialized global registry with {len(deduped)} entries for invocation {invocation_id}")
 
 
 def faasr_registry_query(faasr_payload, action_name=None) -> list:

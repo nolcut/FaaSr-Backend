@@ -44,12 +44,12 @@
       "type": "string"
     },
     "GlobalInputFiles": {
-      "description": "Pre-existing file URIs (folder/file.ext) made available to all agents as read-only inputs",
+      "description": "Pre-existing file URIs or glob patterns (e.g., folder/file.ext, data/*.txt, data/*/text.file) made available to all agents as read-only inputs",
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     },
     "GlobalInputFolders": {
-      "description": "S3 folder prefixes to recursively scan; all discovered files become read-only registry entries",
+      "description": "S3 folder prefixes or glob patterns to scan; all discovered files become read-only registry entries (e.g., raw-data/, archive/*/)",
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
     },

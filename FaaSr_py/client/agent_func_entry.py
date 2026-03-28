@@ -31,6 +31,7 @@ INSTALLED_PACKAGES_FILE = "/tmp/agent/installed_packages.json"
 IO_TEMP = 0.0
 CODING_TEMP = 0.2
 EVALUATOR_TEMP = 0.0
+SAMPLE_BUDGET_CHARS = 20_000   # total chars budgeted across all selected files
 
 
 def _run_prefix(faasr) -> str:
@@ -125,6 +126,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         # Download files + inspect
         os.makedirs(INPUT_DIR, exist_ok=True)
         file_metadata: Dict[str, Any] = {}
+        per_file_chars = SAMPLE_BUDGET_CHARS // len(selected_uris) if selected_uris else 0
 
         for uri in selected_uris:
             parts = uri.rsplit("/", 1)
@@ -166,7 +168,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
                 except Exception as e:
                     logger.warning(f"IO agent could not download sidecar for {uri}: {e}")
 
-            sample = _sample_file(local_path, sidecar)
+            sample = _sample_file(local_path, sidecar, per_file_chars)
             file_metadata[uri] = {
                 "local_path": local_path,
                 "sidecar": sidecar,
@@ -383,27 +385,26 @@ def _select_files(
     return uris
 
 
-def _sample_file(local_path: str, sidecar: dict) -> str:
+def _sample_file(local_path: str, sidecar: dict, max_chars: int) -> str:
     """
-    Return a short representative sample of the file's content,
-    guided by the sidecar schema when available.
-    Limits sample to 1000 chars to balance context and payload size.
+    Return a representative sample of the file's content, guided by the sidecar
+    schema when available. Truncated to max_chars to keep coding agent context bounded.
     """
-    max_sample_chars = 1000
+    if max_chars <= 0:
+        return ""
     try:
         if local_path.endswith(".json"):
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                # Use sidecar keys to pick specific fields if available
                 keys = sidecar.get("properties", {}).keys() if sidecar else data.keys()
                 sample = {k: data[k] for k in list(keys)[:5] if k in data}
                 result = json.dumps(sample, indent=2)
             elif isinstance(data, list):
                 result = json.dumps(data[:3], indent=2)
             else:
-                result = str(data)[:max_sample_chars]
-            return result[:max_sample_chars]
+                result = str(data)[:max_chars]
+            return result[:max_chars]
 
         if local_path.endswith(".csv"):
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
@@ -411,7 +412,7 @@ def _sample_file(local_path: str, sidecar: dict) -> str:
                 rows = [next(reader, [])]  # header
                 rows += [next(reader, []) for _ in range(3)]
             result = "\n".join(",".join(row) for row in rows if row)
-            return result[:max_sample_chars]
+            return result[:max_chars]
 
         # Binary/image files — no sampling
         return ""

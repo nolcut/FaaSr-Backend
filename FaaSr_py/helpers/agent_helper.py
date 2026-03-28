@@ -39,7 +39,7 @@ class OpenAIProvider(LLMProvider):
                     {"role": "user", "content": prompt},
                 ],
                 temperature=temperature,
-                max_tokens=3500,
+                max_tokens=10000,
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -65,7 +65,7 @@ class ClaudeProvider(LLMProvider):
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=3500,
+                max_tokens=10000,
                 temperature=temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],

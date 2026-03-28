@@ -59,7 +59,6 @@ def build_coding_system_prompt(context: dict) -> str:
     file_summary = ""
     if file_metadata:
         parts = []
-        max_sample_chars = 2000
         max_schema_chars = 1000
         for uri, meta in file_metadata.items():
             local_path = meta.get("local_path", "")
@@ -70,9 +69,6 @@ def build_coding_system_prompt(context: dict) -> str:
 
             if len(sidecar_str) > max_schema_chars:
                 sidecar_str = sidecar_str[:max_schema_chars] + "\n... (schema truncated)"
-
-            if len(sample) > max_sample_chars:
-                sample = sample[:max_sample_chars] + f"\n... (truncated, full file at {local_path})"
 
             part = f"File: {uri}\n  Local path: {local_path}\n"
             if description:
