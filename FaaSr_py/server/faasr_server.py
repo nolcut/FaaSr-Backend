@@ -39,7 +39,7 @@ valid_functions = {
 
 # ensure agent does not make too many S3 calls
 agent_request_count = 0
-AGENT_MAX_REQUESTS = 40
+AGENT_MAX_REQUESTS = 100
 
 class Request(BaseModel):
     ProcedureID: str
@@ -248,6 +248,8 @@ def _check_agent_put_file_safety(faasr_payload, args, existing_keys_snapshot: fr
     Reject agent put_file if the target file was registered by an upstream action
     or existed on S3 before this agent run started (snapshot taken at server startup).
 
+    Allow an action to upload files it produced itself (logs, outputs).
+
     Arguments:
         faasr_payload: FaaSr payload dict
         args: Arguments for put_file
@@ -260,11 +262,26 @@ def _check_agent_put_file_safety(faasr_payload, args, existing_keys_snapshot: fr
         r"/+", "/",
         f"{args.get('remote_folder', '.')}/{args.get('remote_file', '')}"
     ).lstrip("/")
+
+    # Extract current action name from remote_folder (format: .../ActionName_logs or .../ActionName_outputs)
+    remote_folder = args.get('remote_folder', '').rstrip('/')
+    current_action = None
+    if remote_folder:
+        parts = remote_folder.split('/')
+        for part in reversed(parts):
+            if part.endswith('_logs') or part.endswith('_outputs'):
+                current_action = part.replace('_logs', '').replace('_outputs', '')
+                break
+
     for entry in faasr_registry_query(faasr_payload):
         if entry.get("file_uri", "").lstrip("/") == target_uri:
+            produced_by = entry['produced_by']
+            # Allow action to overwrite its own files (logs, outputs)
+            if current_action and produced_by == current_action:
+                continue
             raise RuntimeError(
                 f"Cannot overwrite file produced by upstream action "
-                f"'{entry['produced_by']}': {target_uri}"
+                f"'{produced_by}': {target_uri}"
             )
     if target_uri in existing_keys_snapshot:
         raise RuntimeError(f"Cannot overwrite pre-existing file: {target_uri}")

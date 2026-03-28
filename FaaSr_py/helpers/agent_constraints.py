@@ -11,7 +11,7 @@ class AgentConstraints:
     """Configuration for agent security constraints"""
 
     # Maximum number of S3 operations allowed
-    max_s3_requests: int = 40
+    max_s3_requests: int = 100
     
     # Track current operation count
     current_requests: int = 0
