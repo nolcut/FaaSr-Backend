@@ -11,11 +11,8 @@ from FaaSr_py.config.debug_config import global_config
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_PREFIX = "registry/"
-
-
-def _action_registry_key(invocation_id: str, action_name: str) -> str:
-    return f"{REGISTRY_PREFIX}{invocation_id}/{action_name}.json"
+def _action_registry_key(workflow_name: str, invocation_id: str, action_name: str) -> str:
+    return f"{workflow_name}/{invocation_id}/registry/{action_name}.json"
 
 
 def _get_s3_client(faasr_payload, server_name=""):
@@ -45,8 +42,9 @@ def _get_s3_client(faasr_payload, server_name=""):
 
 def _read_action_registry(faasr_payload, action_name: str) -> list:
     """Read a single action's registry file. Returns [] if not found."""
+    workflow_name = faasr_payload.get("WorkflowName", "")
     invocation_id = faasr_payload.get("InvocationID", "")
-    key = _action_registry_key(invocation_id, action_name)
+    key = _action_registry_key(workflow_name, invocation_id, action_name)
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
         if not path.exists():
@@ -71,8 +69,9 @@ def _read_action_registry(faasr_payload, action_name: str) -> list:
 
 def _write_action_registry(faasr_payload, action_name: str, entries: list):
     """Write entries to an action-specific registry file."""
+    workflow_name = faasr_payload.get("WorkflowName", "")
     invocation_id = faasr_payload.get("InvocationID", "")
-    key = _action_registry_key(invocation_id, action_name)
+    key = _action_registry_key(workflow_name, invocation_id, action_name)
     body = json.dumps(entries, indent=2).encode("utf-8")
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
@@ -85,8 +84,9 @@ def _write_action_registry(faasr_payload, action_name: str, entries: list):
 
 def _list_registry_action_names(faasr_payload) -> list:
     """Return all action names that have a registry file for the current invocation."""
+    workflow_name = faasr_payload.get("WorkflowName", "")
     invocation_id = faasr_payload.get("InvocationID", "")
-    prefix = f"{REGISTRY_PREFIX}{invocation_id}/" if invocation_id else REGISTRY_PREFIX
+    prefix = f"{workflow_name}/{invocation_id}/registry/"
     if global_config.USE_LOCAL_FILE_SYSTEM:
         base = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / prefix.rstrip("/")
         if not base.exists():
@@ -107,16 +107,17 @@ def _list_registry_action_names(faasr_payload) -> list:
         return []
 
 
-def _global_registry_key(invocation_id: str) -> str:
-    return f"registry/{invocation_id}/global.json"
+def _global_registry_key(workflow_name: str, invocation_id: str) -> str:
+    return f"{workflow_name}/{invocation_id}/registry/global.json"
 
 
 def _read_global_registry(faasr_payload) -> list:
     """Read the global (immutable) registry for the current invocation. Returns [] if not found."""
+    workflow_name = faasr_payload.get("WorkflowName", "")
     invocation_id = faasr_payload.get("InvocationID", "")
     if not invocation_id:
         return []
-    key = _global_registry_key(invocation_id)
+    key = _global_registry_key(workflow_name, invocation_id)
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
         if not path.exists():
@@ -141,7 +142,8 @@ def _read_global_registry(faasr_payload) -> list:
 
 def _write_global_registry(faasr_payload, invocation_id: str, entries: list):
     """Write the global (immutable) registry for this invocation."""
-    key = _global_registry_key(invocation_id)
+    workflow_name = faasr_payload.get("WorkflowName", "")
+    key = _global_registry_key(workflow_name, invocation_id)
     body = json.dumps(entries, indent=2).encode("utf-8")
     if global_config.USE_LOCAL_FILE_SYSTEM:
         path = Path(global_config.LOCAL_FILE_SYSTEM_DIR) / key
