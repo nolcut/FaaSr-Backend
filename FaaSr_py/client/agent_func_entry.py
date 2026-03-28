@@ -429,26 +429,27 @@ def _summarise_output_dir() -> str:
     output_path = Path(OUTPUT_DIR)
     if not output_path.exists():
         return "(output directory does not exist)"
-    files = list(output_path.iterdir())
+    files = [f for f in output_path.rglob("*") if f.is_file()]
     if not files:
         return "(output directory is empty)"
     lines = []
     for f in files:
+        rel = str(f.relative_to(output_path))
         if f.suffix == ".json":
             try:
                 with open(f, "r") as fp:
                     data = json.load(fp)
                 if isinstance(data, dict):
                     keys = list(data.keys())[:30]
-                    lines.append(f"{f.name}: JSON object with keys {keys}")
+                    lines.append(f"{rel}: JSON object with keys {keys}")
                 elif isinstance(data, list):
-                    lines.append(f"{f.name}: JSON array with {len(data)} items")
+                    lines.append(f"{rel}: JSON array with {len(data)} items")
                 else:
-                    lines.append(f"{f.name}: {type(data).__name__}")
+                    lines.append(f"{rel}: {type(data).__name__}")
             except Exception:
-                lines.append(f"{f.name}: (unreadable JSON)")
+                lines.append(f"{rel}: (unreadable JSON)")
         else:
-            lines.append(f"{f.name}: {f.stat().st_size} bytes")
+            lines.append(f"{rel}: {f.stat().st_size} bytes")
     return "\n".join(lines)
 
 
@@ -511,7 +512,8 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
     for file in output_path.rglob("*"):
         if file.is_file():
             # Preserve relative directory structure in remote folder
-            rel_parent = file.relative_to(output_path).parent
+            rel = file.relative_to(output_path)
+            rel_parent = rel.parent
             remote_subfolder = f"{remote_folder}/{rel_parent}" if str(rel_parent) != "." else remote_folder
 
             try:
@@ -520,7 +522,7 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
                     local_folder=str(file.parent),
                     remote_file=file.name,
                     remote_folder=remote_subfolder,
-                    description=descriptions.get(file.name, ""),
+                    description=descriptions.get(str(rel), ""),
                 )
                 logger.info(f"Uploaded output: {remote_subfolder}/{file.name}")
             except Exception as e:

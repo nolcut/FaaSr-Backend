@@ -13,7 +13,7 @@ EVAL_SYSTEM_PROMPT = (
     "Return ONLY valid JSON with these keys:\n"
     "  \"decision\": \"continue\"|\"loop_back\"|\"abort\"\n"
     "  \"reasoning\": \"<string>\"\n"
-    "  \"file_descriptions\": {\"<filename>\": \"<natural language description of what the file contains>\"}\n"
+    "  \"file_descriptions\": {\"<relative path from output dir, e.g. subdir/file.tif or file.csv>\": \"<natural language description of what the file contains>\"}\n"
     "Default to 'continue' unless there is a clear, objective reason not to.\n"
     "- continue: the agent produced output files and no unhandled exception occurred. "
     "Do NOT second-guess meta-context, such as date ranges.\n"
