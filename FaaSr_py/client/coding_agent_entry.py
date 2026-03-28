@@ -14,85 +14,6 @@ import traceback
 from pathlib import Path
 
 
-def _get_safe_builtins() -> dict:
-    safe_builtins = {
-        # I/O
-        "print": print,
-        "input": input,
-        "open": open,
-        # Type constructors
-        "str": str,
-        "int": int,
-        "float": float,
-        "bool": bool,
-        "list": list,
-        "dict": dict,
-        "tuple": tuple,
-        "set": set,
-        "frozenset": frozenset,
-        "bytes": bytes,
-        "bytearray": bytearray,
-        "complex": complex,
-        # Utilities
-        "len": len,
-        "range": range,
-        "enumerate": enumerate,
-        "zip": zip,
-        "map": map,
-        "filter": filter,
-        "sorted": sorted,
-        "reversed": reversed,
-        "sum": sum,
-        "min": min,
-        "max": max,
-        "abs": abs,
-        "round": round,
-        "pow": pow,
-        "divmod": divmod,
-        "slice": slice,
-        # Type checking
-        "type": type,
-        "isinstance": isinstance,
-        "issubclass": issubclass,
-        "callable": callable,
-        # String methods
-        "chr": chr,
-        "ord": ord,
-        "format": format,
-        "repr": repr,
-        "ascii": ascii,
-        "bin": bin,
-        "hex": hex,
-        "oct": oct,
-        # Error handling
-        "Exception": Exception,
-        "RuntimeError": RuntimeError,
-        "ValueError": ValueError,
-        "TypeError": TypeError,
-        "KeyError": KeyError,
-        "IndexError": IndexError,
-        "AttributeError": AttributeError,
-        "OSError": OSError,
-        "IOError": IOError,
-        "FileNotFoundError": FileNotFoundError,
-        # Iteration
-        "iter": iter,
-        "next": next,
-        # Functional
-        "all": all,
-        "any": any,
-        "hash": hash,
-        "id": id,
-        # Attribute access
-        "getattr": getattr,
-        "setattr": setattr,
-        "hasattr": hasattr,
-        "delattr": delattr,
-        # Import
-        "__import__": __import__,
-    }
-    return safe_builtins
-
 
 def main():
     if len(sys.argv) < 3:
@@ -216,7 +137,7 @@ def main():
 
     # Build execution namespace
     namespace = {
-        "__builtins__": _get_safe_builtins(),
+        "__builtins__": __builtins__,
         "faasr_log": _faasr_log,
         "faasr_install": _faasr_install,
         "faasr_invocation_id": lambda: _invocation_id,
@@ -224,16 +145,6 @@ def main():
         # Injected variables
         "input_dir": input_dir,
         "output_dir": output_dir,
-        # Common stdlib imports
-        "json": __import__("json"),
-        "os": __import__("os"),
-        "sys": __import__("sys"),
-        "csv": __import__("csv"),
-        "math": __import__("math"),
-        "datetime": __import__("datetime"),
-        "re": __import__("re"),
-        "pathlib": __import__("pathlib"),
-        "Path": Path,
     }
 
     # Scrub the agent key before executing generated code
