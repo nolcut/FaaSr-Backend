@@ -11,11 +11,11 @@ from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from FaaSr_py.client.agent_prompts import EVAL_SYSTEM_PROMPT, IO_SYSTEM_PROMPT
 from FaaSr_py.client.agent_stubs import agent_put_file
 from FaaSr_py.client.coding_agent_backend import get_coding_backend
 from FaaSr_py.client.py_client_stubs import faasr_exit, faasr_extend, faasr_return
 from FaaSr_py.helpers.agent_helper import AgentCodeGenerator, get_agent_api_key, get_agent_provider
-from FaaSr_py.helpers.rank import faasr_rank as _faasr_rank
 from FaaSr_py.helpers.s3_helper_functions import flush_s3_log
 from FaaSr_py.s3_api import faasr_get_file, faasr_put_file
 from FaaSr_py.s3_api.registry import faasr_registry_query
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 INPUT_DIR = "/tmp/agent/input"
 OUTPUT_DIR = "/tmp/agent/output"
 CODE_DIR = "/tmp/agent/code"
+LOGS_DIR = "/tmp/agent/logs"
+INSTALLED_PACKAGES_FILE = "/tmp/agent/installed_packages.json"
 
 
 def _run_prefix(faasr) -> str:
@@ -108,10 +110,9 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         logger.info("Node: io_agent")
         registry_entries = state.get("registry_entries", [])
         prompt = state.get("prompt", "")
-        workflow_spec = state.get("workflow_spec", {})
 
         # LLM selects which file URIs to download
-        selected_uris = _select_files(generator, prompt, workflow_spec, registry_entries)
+        selected_uris = _select_files(generator, prompt, registry_entries)
         logger.info(f"IO agent selected {len(selected_uris)} files")
 
         # Build URI→entry lookup for schema_uri
@@ -187,21 +188,27 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         context = {
             "prompt": state.get("prompt", ""),
             "function_invoke": state.get("function_invoke", ""),
-            "workflow_spec": state.get("workflow_spec", {}),
             "registry_entries": relevant_entries,
             "file_metadata": state.get("file_metadata", {}),
             "input_dir": INPUT_DIR,
             "output_dir": OUTPUT_DIR,
             "code_dir": CODE_DIR,
-            "logs_dir": "/tmp/agent/logs",
-            "invocation_id": faasr.get("InvocationID", ""),
-            "rank": _faasr_rank(faasr_payload=faasr),
+            "logs_dir": LOGS_DIR,
             "temperature": 0.2,
             "eval_feedback": eval_reasoning,
+            "exception": state.get("coding_result", {}).get("exception", ""),
             "loop_count": loop_count,
         }
         result = get_coding_backend().run(context)
         logger.info(f"Coding agent finished: success={result.success}")
+
+        installed_packages = []
+        try:
+            pkg_file = Path(INSTALLED_PACKAGES_FILE)
+            if pkg_file.exists():
+                installed_packages = json.loads(pkg_file.read_text())
+        except Exception:
+            pass
 
         if not result.success:
             function_invoke = state.get("function_invoke", "coding_agent")
@@ -218,7 +225,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
                 except Exception as e:
                     logger.warning(f"Could not upload failed code: {e}")
 
-        return {"coding_result": {"success": result.success, "exception": result.exception}}
+        return {"coding_result": {"success": result.success, "exception": result.exception, "installed_packages": installed_packages}}
 
     def _node_eval_agent(state: AgentGraphState) -> Dict[str, Any]:
         logger.info("Node: eval_agent")
@@ -230,24 +237,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         output_summary = _summarise_output_dir()
 
         # LLM evaluation
-        system_prompt = (
-            "You are evaluating the output of a coding agent.\n"
-            "Return ONLY valid JSON with these keys:\n"
-            "  \"decision\": \"continue\"|\"loop_back\"|\"abort\"\n"
-            "  \"reasoning\": \"<string>\"\n"
-            "  \"file_descriptions\": {\"<filename>\": \"<natural language description of what the file contains>\"}\n"
-            "Default to 'continue' unless there is a clear, objective reason not to.\n"
-            "- continue: the agent produced output files and no unhandled exception occurred. "
-            "Do NOT second-guess domain logic, date ranges, values, or whether the approach seems optimal.\n"
-            "- loop_back: ONLY if the agent raised an unhandled exception, produced zero output files, "
-            "or every output file is empty.\n"
-            "- abort: ONLY if the exception is truly unrecoverable (e.g. missing credentials, "
-            "invalid workflow config). Never abort for missing packages — use loop_back.\n"
-            "IMPORTANT: The coding agent CAN install missing packages at runtime using faasr_install(). "
-            "A ModuleNotFoundError is always loop_back, never abort.\n"
-            "Provide a file_descriptions entry for every output file listed.\n"
-            "Do not include any text outside the JSON."
-        )
+        system_prompt = EVAL_SYSTEM_PROMPT
         coding_log = ""
         _log_file = Path("/tmp/agent/logs/coding_agent.log")
         if _log_file.exists():
@@ -292,7 +282,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         # On continue: write manifest then upload outputs
         if decision == "continue":
             function_invoke = state.get("function_invoke", "unknown")
-            _write_manifest(faasr, state, file_descriptions)
+            _write_manifest(faasr, state, file_descriptions, state.get("coding_result", {}).get("installed_packages", []))
             _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions)
             _upload_generated_code(function_invoke, _run_prefix(faasr))
 
@@ -356,7 +346,6 @@ def _eval_router(state: AgentGraphState) -> str:
 def _select_files(
     generator: AgentCodeGenerator,
     prompt: str,
-    workflow_spec: Dict[str, Any],
     registry_entries: List[Dict],
 ) -> List[str]:
     """Ask the LLM to select file URIs from registry entries."""
@@ -370,15 +359,9 @@ def _select_files(
     ]
     valid_uris = {e.get("file_uri", "") for e in registry_entries}
 
-    system_prompt = (
-        "You are a file selection assistant. Choose files needed to complete the user task.\n"
-        "Return ONLY valid JSON: {\"uris\": [<list of uri strings>], \"rationale\": \"<string>\"}\n"
-        "Use the exact uri values from the registry entries. Choose at most 10 files.\n"
-        "Do not include any text outside the JSON."
-    )
+    system_prompt = IO_SYSTEM_PROMPT
     selection_prompt = (
         f"Task: {prompt}\n\n"
-        f"Workflow spec:\n{json.dumps(workflow_spec, indent=2)}\n\n"
         f"Registry entries:\n"
         + "\n".join(f"- uri={e['uri']} name={e['name']}: {e['description']}" for e in visible_entries)
     )
@@ -393,7 +376,7 @@ def _select_files(
         logger.warning(f"IO agent dropped {len(dropped)} hallucinated URIs: {dropped}")
     uris = [u for u in all_returned if u in valid_uris]
     logger.info(f"IO agent selected URIs: {uris}")
-    return uris[:10]
+    return uris
 
 
 def _sample_file(local_path: str, sidecar: dict) -> str:
@@ -451,7 +434,7 @@ def _summarise_output_dir() -> str:
                 with open(f, "r") as fp:
                     data = json.load(fp)
                 if isinstance(data, dict):
-                    keys = list(data.keys())[:10]
+                    keys = list(data.keys())[:30]
                     lines.append(f"{f.name}: JSON object with keys {keys}")
                 elif isinstance(data, list):
                     lines.append(f"{f.name}: JSON array with {len(data)} items")
@@ -464,8 +447,8 @@ def _summarise_output_dir() -> str:
     return "\n".join(lines)
 
 
-def _write_manifest(faasr, state: Dict, file_descriptions: dict) -> None:
-    """Write _manifest.json to OUTPUT_DIR recording I/O for static export."""
+def _write_manifest(faasr, state: Dict, file_descriptions: dict, installed_packages: list = None) -> None:
+    """Write manifest.json to OUTPUT_DIR recording I/O for static export."""
     try:
         function_invoke = state.get("function_invoke", "unknown")
         selected_uris = state.get("selected_uris", [])
@@ -492,18 +475,16 @@ def _write_manifest(faasr, state: Dict, file_descriptions: dict) -> None:
         output_path = Path(OUTPUT_DIR)
         if output_path.exists():
             for f in output_path.rglob("*"):
-                if f.is_file() and f.name != "_manifest.json":
-                    rel = str(f.relative_to(output_path))
-                    outputs.append({
-                        "local_file": rel,
-                        "description": file_descriptions.get(f.name, ""),
-                    })
+                if f.is_file() and f.name != "manifest.json":
+                    outputs.append(str(f.relative_to(output_path)))
 
-        # Packages from workflow payload
-        packages = faasr.get("PyPIPackageDownloads", {}).get(function_invoke, [])
+        # Merge declared and runtime-installed packages, no duplicates
+        declared = faasr.get("PyPIPackageDownloads", {}).get(function_invoke, [])
+        runtime = installed_packages or []
+        packages = list(dict.fromkeys(declared + runtime))
 
         manifest = {"inputs": inputs, "outputs": outputs, "packages": packages}
-        manifest_path = output_path / "_manifest.json"
+        manifest_path = output_path / "manifest.json"
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
 

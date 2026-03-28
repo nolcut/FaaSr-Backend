@@ -94,119 +94,6 @@ def _get_safe_builtins() -> dict:
     return safe_builtins
 
 
-def _build_system_prompt(context: dict) -> str:
-    registry_entries = context.get("registry_entries", [])
-    file_metadata = context.get("file_metadata", {})
-    workflow_spec = context.get("workflow_spec", {})
-    input_dir = context.get("input_dir", "/tmp/agent/input")
-    output_dir = context.get("output_dir", "/tmp/agent/output")
-    eval_feedback = context.get("eval_feedback", "")
-    loop_count = context.get("loop_count", 0)
-
-    registry_summary = ""
-    if registry_entries:
-        lines = [f"  - {e.get('name', '?')}: {e.get('description', '')}" for e in registry_entries]
-        registry_summary = "Available registry entries:\n" + "\n".join(lines)
-
-    file_summary = ""
-    if file_metadata:
-        parts = []
-        max_sample_chars = 2000  # Truncate samples only if extremely large
-        max_schema_chars = 1000  # Truncate schemas only if extremely large
-        for uri, meta in file_metadata.items():
-            local_path = meta.get("local_path", "")
-            sidecar = meta.get("sidecar", {})
-            sample = meta.get("sample", "")
-            sidecar_str = json.dumps(sidecar, indent=2) if sidecar else "(no schema)"
-
-            # Only truncate schema if truly massive
-            if len(sidecar_str) > max_schema_chars:
-                sidecar_str = sidecar_str[:max_schema_chars] + "\n... (schema truncated)"
-
-            # Only truncate sample if truly massive
-            if len(sample) > max_sample_chars:
-                sample = sample[:max_sample_chars] + f"\n... (truncated, full file at {local_path})"
-
-            parts.append(
-                f"File: {uri}\n  Local path: {local_path}\n"
-                f"  Schema: {sidecar_str}\n  Sample:\n{sample}"
-            )
-        file_summary = "Input files:\n" + "\n\n".join(parts)
-
-    available_packages = """\
-AVAILABLE PYTHON PACKAGES (pre-installed, import directly):
-- numpy
-- scipy
-- pandas
-- matplotlib
-- Pillow (import PIL)
-- openai, anthropic
-- langgraph
-- requests
-- PyYAML (import yaml)
-- pydantic
-Standard library modules (json, os, sys, csv, math, datetime, re, pathlib) are also available.
-
-Commonly needed geo/science packages (NOT pre-installed — you MUST call faasr_install first):
-- geopandas, shapely, rioxarray, pyproj, fiona, earthaccess, pystac-client"""
-
-    retry_block = ""
-    if eval_feedback and loop_count > 0:
-        retry_block = (
-            f"\n\nPREVIOUS ATTEMPT FAILED (attempt {loop_count}).\n"
-            f"Evaluator feedback: {eval_feedback}\n"
-            f"You MUST fix the issue described above. Do not repeat the same mistake.\n"
-            f"If the failure was a missing package, call faasr_install(\"package_name\") "
-            f"at the top of your code BEFORE any import that uses it.\n"
-        )
-
-    return f"""You are a FaaSr coding agent. You process data files and write results to disk.
-
-CRITICAL OUTPUT RULES:
-- Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
-- Start immediately with import statements or code, no pretext
-
-PACKAGE INSTALLATION RULES (IMPORTANT):
-For every package NOT in the pre-installed list below, you MUST call faasr_install() on its own
-line immediately before the import. Do this unconditionally — even if you think the package
-might already be installed. Never import a non-pre-installed package without calling
-faasr_install() first. Example:
-
-    faasr_install("geopandas")
-    import geopandas as gpd
-    faasr_install("rioxarray")
-    import rioxarray
-
-{retry_block}
-
-CRITICAL RUNTIME RULES:
-- DO NOT use 'faasr' as a variable name or import any 'faasr' module — 'faasr' does not exist in this environment
-- Use ONLY the provided functions (faasr_log, faasr_invocation_id, faasr_rank) for meta-context
-- DO NOT perform any S3 operations — no faasr_put_file, no faasr_get_file
-- Read inputs from: {input_dir}
-- Write ALL outputs to: {output_dir} (JSON or image files: .png, .jpg, .jpeg)
-- Use the input_dir and output_dir variables injected into the runtime
-- Never hardcode run IDs or invocation IDs — use faasr_invocation_id() if needed
-
-AVAILABLE FUNCTIONS (injected into runtime, do not import):
-- faasr_log(log_message): Append a message to the local log file (uploaded to S3 by the eval agent)
-- faasr_invocation_id(): Returns the current invocation ID string
-- faasr_rank(): Returns a dict with "rank" and "max_rank"
-- faasr_install(package_name): Install a Python package at runtime via pip (call before importing)
-
-{available_packages}
-
-WORKFLOW CONTEXT:
-{json.dumps(workflow_spec, indent=2)}
-
-{registry_summary}
-
-{file_summary}
-
-Write Python code that reads inputs from input_dir, processes them, and writes JSON outputs to output_dir.
-Handle errors gracefully. Log what you are doing with faasr_log."""
-
-
 def main():
     if len(sys.argv) < 3:
         print("Usage: coding_agent_entry.py <context_json> <result_json>", file=sys.stderr)
@@ -230,6 +117,7 @@ def main():
         # Import agent helpers
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
         from FaaSr_py.helpers.agent_helper import AgentCodeGenerator, get_agent_api_key, get_agent_provider
+        from FaaSr_py.client.agent_prompts import build_coding_system_prompt
     except Exception as e:
         write_result(False, f"Import error: {e}\n{traceback.format_exc()}")
         sys.exit(1)
@@ -242,7 +130,7 @@ def main():
             sys.exit(1)
 
         generator = AgentCodeGenerator(api_key, provider)
-        system_prompt = _build_system_prompt(context)
+        system_prompt = build_coding_system_prompt(context)
         prompt = context.get("prompt", "")
 
         def _generate_and_clean(gen_prompt):
@@ -304,6 +192,8 @@ def main():
     except Exception as e:
         _faasr_log(f"Warning: could not save generated code: {e}")
 
+    _installed_packages_path = Path("/tmp/agent/installed_packages.json")
+
     def _faasr_install(package_name: str):
         import importlib
         import subprocess
@@ -316,6 +206,13 @@ def main():
             raise RuntimeError(f"pip install {package_name!r} failed:\n{result.stderr}")
         importlib.invalidate_caches()
         _faasr_log(f"Installed package: {package_name}")
+        try:
+            existing = json.loads(_installed_packages_path.read_text()) if _installed_packages_path.exists() else []
+            if package_name not in existing:
+                existing.append(package_name)
+            _installed_packages_path.write_text(json.dumps(existing))
+        except Exception:
+            pass
 
     # Build execution namespace
     namespace = {
