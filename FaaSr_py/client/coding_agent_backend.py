@@ -43,9 +43,6 @@ class DirectExecBackend(CodingAgentBackend):
     No sandboxing — intended for development and testing.
     """
 
-    def __init__(self, timeout: int = 300):
-        self.timeout = timeout
-
     def run(self, context: dict) -> CodingResult:
         run_id = uuid.uuid4().hex
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
@@ -62,7 +59,6 @@ class DirectExecBackend(CodingAgentBackend):
                 proc = subprocess.run(
                     [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
                     env=env,
-                    timeout=self.timeout,
                     capture_output=True,
                     text=True,
                 )
@@ -74,9 +70,6 @@ class DirectExecBackend(CodingAgentBackend):
                 logger.warning(f"Coding agent subprocess exited with code {proc.returncode}")
             return _read_result(result_file)
 
-        except subprocess.TimeoutExpired:
-            logger.error("Coding agent subprocess timed out")
-            return CodingResult(success=False, exception="Subprocess timed out")
         except Exception as e:
             logger.error(f"Coding agent backend error: {e}")
             return CodingResult(success=False, exception=str(e))
@@ -94,9 +87,6 @@ class NsjailBackend(CodingAgentBackend):
     Binds /tmp read-write. Only AGENT_KEY and PYTHONPATH are passed through.
     """
 
-    def __init__(self, timeout: int = 300):
-        self.timeout = timeout
-
     def run(self, context: dict) -> CodingResult:
         run_id = uuid.uuid4().hex
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
@@ -113,7 +103,6 @@ class NsjailBackend(CodingAgentBackend):
                 cmd = [
                     "nsjail",
                     "-Mo",
-                    "--time_limit", str(self.timeout),
                     "--bindmount", "/tmp",
                     "--disable_clone_newnet",   # allow network access (needed for pip installs)
                     "--disable_clone_newuser",  # avoid clone() permission errors in containers
@@ -123,7 +112,7 @@ class NsjailBackend(CodingAgentBackend):
                     ctx_file,
                     result_file,
                 ]
-                proc = subprocess.run(cmd, env=env, timeout=self.timeout + 10, capture_output=True, text=True)
+                proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
             finally:
                 faasr_unblock_requests(secret)
 
@@ -132,9 +121,6 @@ class NsjailBackend(CodingAgentBackend):
                 logger.warning(f"Coding agent subprocess exited with code {proc.returncode}")
             return _read_result(result_file)
 
-        except subprocess.TimeoutExpired:
-            logger.error("Coding agent nsjail subprocess timed out")
-            return CodingResult(success=False, exception="Subprocess timed out")
         except Exception as e:
             logger.error(f"Coding agent backend error: {e}")
             return CodingResult(success=False, exception=str(e))

@@ -528,8 +528,6 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
             except Exception as e:
                 logger.error(f"Failed to upload {file.name}: {e}")
 
-    _log_generated_code_to_s3(remote_folder, run_prefix)
-
 
 def _upload_generated_code(function_invoke: str, run_prefix: str):
     """Upload the generated code file from CODE_DIR to S3 for TUI display."""
@@ -609,24 +607,3 @@ def _extract_json(text: str) -> Dict[str, Any] | None:
     except Exception:
         return None
     return None
-
-
-def _log_generated_code_to_s3(remote_folder: str, run_prefix: str):
-    """Upload an audit marker noting this agent run produced outputs."""
-    try:
-        import time
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        marker_name = f"agent_run_{timestamp}.json"
-        marker_path = f"/tmp/{marker_name}"
-        with open(marker_path, "w") as f:
-            json.dump({"agent_run": timestamp, "output_folder": remote_folder}, f)
-        # Use py_client_stubs so this doesn't trigger registry add
-        from FaaSr_py.client.py_client_stubs import faasr_put_file as rpc_put
-        rpc_put(
-            local_file=marker_name,
-            local_folder="/tmp",
-            remote_file=marker_name,
-            remote_folder=f"{run_prefix}/agent_audit",
-        )
-    except Exception as e:
-        logger.warning(f"Could not log audit marker to S3: {e}")
