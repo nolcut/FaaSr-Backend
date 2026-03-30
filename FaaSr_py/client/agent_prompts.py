@@ -23,6 +23,10 @@ EVAL_SYSTEM_PROMPT = (
     "invalid workflow config). Never abort for missing packages — use loop_back.\n"
     "IMPORTANT: The coding agent CAN install missing packages at runtime using faasr_install(). "
     "A ModuleNotFoundError is always loop_back, never abort.\n"
+    "STATIC FILENAMES: Output filenames must be static string literals. If the agent used dynamic "
+    "filenames constructed from dates, timestamps, invocation IDs, or any variable context "
+    "(e.g. f-strings with function calls, datetime.now()), treat this as loop_back — "
+    "downstream steps depend on predictable, unchanging filenames.\n"
     "Provide a file_descriptions entry for every output file listed.\n"
     "Do not include any text outside the JSON."
 )
@@ -90,7 +94,7 @@ def build_coding_system_prompt(context: dict) -> str:
             "at the top of your code BEFORE any import that uses it.\n"
         )
 
-    return f"""You are a FaaSr coding agent. You process data files and write results to disk.
+    return f"""You are a coding agent. You process data files and write results to disk.
 
 CRITICAL OUTPUT RULES:
 - Generate ONLY pure Python code — no markdown, no triple backticks, no ```python tags
@@ -117,6 +121,10 @@ CRITICAL RUNTIME RULES:
 - Write ALL outputs to: {output_dir}
 - Use the input_dir and output_dir variables injected into the runtime
 - Never hardcode run IDs or invocation IDs — use faasr_invocation_id() if needed
+- Output filenames MUST be static string literals — do NOT construct them from dates, timestamps,
+  runtime values, or any variable context (no datetime.now(), no faasr_invocation_id(), no f-strings
+  with function calls). Use short descriptive names like "temperature_data.csv", "plot.png",
+  "results.json". Static exports depend on predictable, unchanging filenames.
 
 AVAILABLE FUNCTIONS (injected into runtime, do not import):
 - faasr_log(log_message): Append a message to the local log file (uploaded to S3 by the eval agent)
