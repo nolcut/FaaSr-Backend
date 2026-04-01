@@ -1,9 +1,6 @@
-import json
 import logging
 import re
 import sys
-import tempfile
-from pathlib import Path
 
 import requests
 import uvicorn
@@ -20,26 +17,11 @@ from FaaSr_py.s3_api import (
     faasr_get_s3_creds,
     faasr_log,
     faasr_put_file,
-    faasr_registry_add,
-    faasr_registry_query,
     faasr_registry_remove,
 )
-from FaaSr_py.s3_api.registry import _build_registry_entry, _generate_sidecar, faasr_snapshot_existing_keys
 
 logger = logging.getLogger(__name__)
 faasr_api = FastAPI()
-valid_functions = {
-    "faasr_get_file",
-    "faasr_put_file",
-    "faasr_delete_file",
-    "faasr_get_folder_list",
-    "faasr_log",
-    "faasr_rank",
-}
-
-# ensure agent does not make too many S3 calls
-agent_request_count = 0
-AGENT_MAX_REQUESTS = 100
 
 class Request(BaseModel):
     ProcedureID: str
@@ -70,14 +52,6 @@ class Exit(BaseModel):
     Traceback: str | None = None
 
 
-class BlockRequest(BaseModel):
-    secret: str
-
-
-class UnblockRequest(BaseModel):
-    secret: str
-
-
 def register_request_handler(faasr_payload):
     """ "
     Setup FastAPI request handlers for FaaSr functions
@@ -89,57 +63,12 @@ def register_request_handler(faasr_payload):
     message = None
     traceback = None
     error = False
-    agent_request_count = 0  # Local counter for agent requests
-    blocked = False
-    block_secret = None
-    existing_keys_snapshot = faasr_snapshot_existing_keys(faasr_payload)  # frozen at startup
-
-    @faasr_api.post("/faasr-block")
-    def faasr_block_handler(req: BlockRequest):
-        nonlocal blocked, block_secret
-        blocked = True
-        block_secret = req.secret
-        return Response(Success=True)
-
-    @faasr_api.post("/faasr-unblock")
-    def faasr_unblock_handler(req: UnblockRequest):
-        nonlocal blocked, block_secret
-        if req.secret != block_secret:
-            return Response(Success=False, Message="Invalid unblock secret")
-        blocked = False
-        block_secret = None
-        return Response(Success=True)
 
     @faasr_api.post("/faasr-action")
     def faasr_request_handler(request: Request):
-        """
-        Handler for FaaSr function requests
-
-        Enforces agent constraints if IsAgentRequest is True:
-        - Agents cannot delete files
-        - Agents have limited request count
-        - Agents cannot overwrite files registered by upstream actions
-        """
-        nonlocal error, agent_request_count
-        if blocked:
-            return Response(Success=False, Message="Server temporarily blocked during agent execution")
-        logger.info(f"Processing request: {request.ProcedureID} (Agent: {request.IsAgentRequest})")
-
-        # Check agent constraints
-        if request.IsAgentRequest:
-            agent_request_count += 1
-
-            # Enforce agent request limit
-            if agent_request_count > AGENT_MAX_REQUESTS:
-                error_msg = f"Agent request limit exceeded ({agent_request_count}/{AGENT_MAX_REQUESTS})"
-                logger.error(error_msg)
-                return Response(Success=False, Message=error_msg)
-
-            # Agents cannot delete files
-            if request.ProcedureID == "faasr_delete_file":
-                error_msg = "Agents are not allowed to delete files"
-                logger.error(error_msg)
-                return Response(Success=False, Message=error_msg)
+        """Handler for FaaSr function requests (Python/R user functions only)."""
+        nonlocal error
+        logger.info(f"Processing request: {request.ProcedureID}")
 
         args = request.Arguments or {}
         return_obj = Response(Success=True, Data={})
@@ -148,20 +77,12 @@ def register_request_handler(faasr_payload):
                 case "faasr_log":
                     faasr_log(faasr_payload=faasr_payload, **args)
                 case "faasr_put_file":
-                    if request.IsAgentRequest:
-                        try:
-                            _check_agent_put_file_safety(faasr_payload, args, existing_keys_snapshot)
-                        except RuntimeError as e:
-                            return Response(Success=False, Message=str(e))
                     put_file_args = {k: v for k, v in args.items() if k != "description"}
                     faasr_put_file(faasr_payload=faasr_payload, **put_file_args)
-                    if request.IsAgentRequest:
-                        _handle_agent_post_put(faasr_payload, args)
                 case "faasr_get_file":
                     faasr_get_file(faasr_payload=faasr_payload, **args)
                 case "faasr_delete_file":
                     faasr_delete_file(faasr_payload=faasr_payload, **args)
-                    # Auto-remove registry entry on any delete
                     file_uri = re.sub(
                         r"/+", "/",
                         f"{args.get('remote_folder', '.')}/{args.get('remote_file', '')}"
@@ -176,10 +97,6 @@ def register_request_handler(faasr_payload):
                 case "faasr_rank":
                     return_obj.Data = faasr_rank(faasr_payload=faasr_payload)
                 case "faasr_get_s3_creds":
-                    if request.IsAgentRequest:
-                        error_msg = "Agents are not allowed to access S3 credentials"
-                        logger.error(error_msg)
-                        return Response(Success=False, Message=error_msg)
                     return_obj.Data["s3_creds"] = faasr_get_s3_creds(
                         faasr_payload=faasr_payload, **args
                     )
@@ -194,7 +111,6 @@ def register_request_handler(faasr_payload):
             logger.error(err_msg)
             error = True
             sys.exit(1)
-        # flush log after every function, since we don't know when user function will end
         flush_s3_log()
         return return_obj
 
@@ -242,114 +158,6 @@ def faasr_echo(message: str):
     """
     return {"message": message}
 
-
-def _check_agent_put_file_safety(faasr_payload, args, existing_keys_snapshot: frozenset):
-    """
-    Reject agent put_file if the target file was registered by an upstream action
-    or existed on S3 before this agent run started (snapshot taken at server startup).
-
-    Allow an action to upload files it produced itself (logs, outputs).
-
-    Arguments:
-        faasr_payload: FaaSr payload dict
-        args: Arguments for put_file
-        existing_keys_snapshot: frozenset of normalized S3 keys at agent startup
-
-    Raises:
-        RuntimeError if the target file is immutable
-    """
-    target_uri = re.sub(
-        r"/+", "/",
-        f"{args.get('remote_folder', '.')}/{args.get('remote_file', '')}"
-    ).lstrip("/")
-
-    # Extract current action name from remote_folder (format: .../ActionName_logs or .../ActionName_outputs)
-    remote_folder = args.get('remote_folder', '').rstrip('/')
-    current_action = None
-    if remote_folder:
-        parts = remote_folder.split('/')
-        for part in reversed(parts):
-            if part.endswith('_logs') or part.endswith('_outputs'):
-                current_action = part.replace('_logs', '').replace('_outputs', '')
-                break
-
-    for entry in faasr_registry_query(faasr_payload):
-        if entry.get("file_uri", "").lstrip("/") == target_uri:
-            produced_by = entry['produced_by']
-            # Allow action to overwrite its own files (logs, outputs)
-            if current_action and produced_by == current_action:
-                continue
-            raise RuntimeError(
-                f"Cannot overwrite file produced by upstream action "
-                f"'{produced_by}': {target_uri}"
-            )
-    if target_uri in existing_keys_snapshot:
-        raise RuntimeError(f"Cannot overwrite pre-existing file: {target_uri}")
-
-
-def _handle_agent_post_put(faasr_payload, args):
-    """
-    After a successful agent put_file:
-    - Generate and upload a sidecar schema for JSON files
-    - Add entry to registry
-
-    Arguments:
-        faasr_payload: FaaSr payload dict
-        args: put_file Arguments dict
-    """
-    remote_file = args.get("remote_file", "")
-    function_invoke = faasr_payload.get("FunctionInvoke", "")
-    if (
-        remote_file == "manifest.json"
-        or remote_file.endswith("_coding_agent.log")
-        or remote_file == f"{function_invoke}.py"
-    ):
-        return
-
-    local_path = str(Path(args.get("local_folder", ".")) / args.get("local_file", ""))
-    schema_uri = ""
-
-    if local_path.endswith(".json"):
-        sidecar = _generate_sidecar(local_path)
-        if sidecar:
-            schema_uri = _upload_sidecar(faasr_payload, args, sidecar)
-
-    entry = _build_registry_entry(faasr_payload, args, schema_uri=schema_uri, description=args.get("description", ""))
-    faasr_registry_add(faasr_payload, entry)
-
-
-def _upload_sidecar(faasr_payload, args, sidecar: dict) -> str:
-    """
-    Write sidecar JSON to a temp file and upload it alongside the main file.
-    Returns the sidecar's file_uri.
-
-    Arguments:
-        faasr_payload: FaaSr payload dict
-        args: original put_file args (to derive remote location)
-        sidecar: dict from _generate_sidecar
-    """
-    remote_folder = args.get("remote_folder", ".")
-    remote_file = args.get("remote_file", "")
-    sidecar_remote_file = f"{remote_file}.schema.json"
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".schema.json", delete=False
-    ) as tmp:
-        json.dump(sidecar, tmp, indent=2)
-        tmp_path = tmp.name
-
-    try:
-        faasr_put_file(
-            faasr_payload=faasr_payload,
-            local_file=Path(tmp_path).name,
-            remote_file=sidecar_remote_file,
-            local_folder=str(Path(tmp_path).parent),
-            remote_folder=remote_folder,
-        )
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-    return re.sub(r"/+", "/", f"{remote_folder}/{sidecar_remote_file}").lstrip("/")
 
 
 def wait_for_server_start(port):

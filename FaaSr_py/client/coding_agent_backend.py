@@ -1,15 +1,12 @@
 import json
 import logging
 import os
-import secrets
 import subprocess
 import sys
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-
-from FaaSr_py.client.agent_stubs import faasr_block_requests, faasr_unblock_requests
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +45,17 @@ class DirectExecBackend(CodingAgentBackend):
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
         result_file = f"/tmp/faasr_agent_result_{run_id}.json"
 
-        secret = secrets.token_hex(32)
         try:
             with open(ctx_file, "w") as f:
                 json.dump(context, f)
 
-            faasr_block_requests(secret)
-            try:
-                env = _filtered_env()
-                proc = subprocess.run(
-                    [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                )
-            finally:
-                faasr_unblock_requests(secret)
+            env = _filtered_env()
+            proc = subprocess.run(
+                [sys.executable, str(_ENTRY_SCRIPT), ctx_file, result_file],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
 
             _append_subprocess_output(proc)
             if proc.returncode != 0:
@@ -92,29 +84,24 @@ class NsjailBackend(CodingAgentBackend):
         ctx_file = f"/tmp/faasr_agent_ctx_{run_id}.json"
         result_file = f"/tmp/faasr_agent_result_{run_id}.json"
 
-        secret = secrets.token_hex(32)
         try:
             with open(ctx_file, "w") as f:
                 json.dump(context, f)
 
-            faasr_block_requests(secret)
-            try:
-                env = _filtered_env()
-                cmd = [
-                    "nsjail",
-                    "-Mo",
-                    "--bindmount", "/tmp",
-                    "--disable_clone_newnet",   # allow network access (needed for pip installs)
-                    "--disable_clone_newuser",  # avoid clone() permission errors in containers
-                    "--",
-                    sys.executable,
-                    str(_ENTRY_SCRIPT),
-                    ctx_file,
-                    result_file,
-                ]
-                proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
-            finally:
-                faasr_unblock_requests(secret)
+            env = _filtered_env()
+            cmd = [
+                "nsjail",
+                "-Mo",
+                "--bindmount", "/tmp",
+                "--disable_clone_newnet",   # allow network access (needed for pip installs)
+                "--disable_clone_newuser",  # avoid clone() permission errors in containers
+                "--",
+                sys.executable,
+                str(_ENTRY_SCRIPT),
+                ctx_file,
+                result_file,
+            ]
+            proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
 
             _append_subprocess_output(proc)
             if proc.returncode != 0:
@@ -149,11 +136,14 @@ def _append_subprocess_output(proc) -> None:
 
 def _filtered_env() -> dict:
     """Return a minimal environment for the coding agent subprocess.
-    Explicitly excludes AWS credentials and any DataStore secrets.
+    Explicitly excludes AWS credentials, DataStore secrets, HOME (~/.ssh, ~/.aws),
+    and PYTHONPATH (module injection risk).
     AGENT_KEY is passed through so the subprocess can call the LLM for code generation,
     but coding_agent_entry.py scrubs it before exec-ing the generated code."""
-    allowed = {"PATH", "HOME", "PYTHONPATH", "TMPDIR", "LANG", "LC_ALL", "AGENT_KEY"}
-    return {k: v for k, v in os.environ.items() if k in allowed and v is not None}
+    allowed = {"PATH", "TMPDIR", "LANG", "LC_ALL", "AGENT_KEY"}
+    env = {k: v for k, v in os.environ.items() if k in allowed and v is not None}
+    env["HOME"] = "/tmp/agent"
+    return env
 
 
 def _read_result(result_file: str) -> CodingResult:

@@ -159,6 +159,8 @@ def faasr_get_github_raw(token, path):
 
         if len(parts) < 7 or parts[5] != "blob":
             err_msg = "invalid github url (check GitHub url for function)"
+            logger.error(err_msg)
+            sys.exit(1)
 
         username = parts[3]
         reponame = parts[4]
@@ -404,7 +406,7 @@ def faasr_func_dependancy_install(faasr_source, action):
             # copy local files to /tmp/functions/{InvocationID}
             copy_local_files(faasr_source, local_gits)
 
-    if "PyPIPackageDownloads" in faasr_source and func_type in ("Python", "Agent"):
+    if "PyPIPackageDownloads" in faasr_source and func_type in ("Python", "Agent", "Bridge"):
         pypi_packages = faasr_source["PyPIPackageDownloads"].get(func_name)
         if pypi_packages:
             for package in pypi_packages:
@@ -429,11 +431,11 @@ def faasr_func_dependancy_install(faasr_source, action):
         if func_name in faasr_source["FunctionGitHubPackage"]:
             gh_packages = faasr_source["FunctionGitHubPackage"].get(func_name)
             if gh_packages:
-                if func_type in ("Python", "Agent"):
+                if func_type in ("Python", "Agent", "Bridge"):
                     faasr_install_git_packages(gh_packages, "Python")
                 elif func_type == "R":
                     faasr_install_git_packages(gh_packages, func_type, "/tmp/Rlibs")
                 else:
-                    err_msg = "Invalid function type: {func_type}"
+                    err_msg = f"Invalid function type: {func_type}"
                     logger.critical(err_msg)
                     raise RuntimeError(err_msg)

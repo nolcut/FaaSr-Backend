@@ -51,7 +51,8 @@ def main():
             sys.exit(1)
 
         generator = AgentCodeGenerator(api_key, provider)
-        system_prompt = build_coding_system_prompt(context)
+        # Allow callers (e.g. Bridge) to inject a pre-built system prompt
+        system_prompt = context.get("system_prompt") or build_coding_system_prompt(context)
         prompt = context.get("prompt", "")
 
         def _generate_and_clean(gen_prompt):
@@ -66,12 +67,12 @@ def main():
             return raw.strip()
 
         code = _generate_and_clean(prompt)
-        for attempt in range(1, 3):
+        for attempt in range(1, 4):
             try:
                 compile(code, "<generated>", "exec")
                 break
             except SyntaxError as e:
-                if attempt == 2:
+                if attempt == 3:
                     write_result(False, f"Syntax error after 3 attempts: {e}")
                     sys.exit(1)
                 code = _generate_and_clean(

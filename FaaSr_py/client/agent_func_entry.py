@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import threading
 import traceback as tb_module
 from pathlib import Path
@@ -12,13 +13,12 @@ from typing import Any, Dict, List, TypedDict
 from langgraph.graph import END, StateGraph
 
 from FaaSr_py.client.agent_prompts import EVAL_SYSTEM_PROMPT, IO_SYSTEM_PROMPT
-from FaaSr_py.client.agent_stubs import agent_put_file
+from FaaSr_py.client.agent_s3_ops import AgentS3Ops
 from FaaSr_py.client.coding_agent_backend import get_coding_backend
-from FaaSr_py.client.py_client_stubs import faasr_exit, faasr_extend, faasr_return
 from FaaSr_py.helpers.agent_helper import AgentCodeGenerator, get_agent_api_key, get_agent_provider
 from FaaSr_py.helpers.s3_helper_functions import flush_s3_log
 from FaaSr_py.s3_api import faasr_get_file, faasr_put_file
-from FaaSr_py.s3_api.registry import faasr_registry_query
+from FaaSr_py.s3_api.registry import faasr_registry_query, faasr_snapshot_existing_keys
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ INSTALLED_PACKAGES_FILE = "/tmp/agent/installed_packages.json"
 IO_TEMP = 0.0
 CODING_TEMP = 0.2
 EVALUATOR_TEMP = 0.0
-SAMPLE_BUDGET_CHARS = 20_000   # total chars budgeted across all selected files
+SAMPLE_BUDGET_CHARS = 20_000   # total chars sampled across all selected files
 
 
 def _run_prefix(faasr) -> str:
@@ -54,7 +54,19 @@ class AgentGraphState(TypedDict, total=False):
     loop_count: int
 
 
-def run_agent_function(faasr, prompt, action_name):
+def _write_agent_result(result_file: str, function_result=None, error: bool = False, message: str = None, traceback: str = None):
+    """Write agent result to a file for the executor to read."""
+    import json as _json
+    with open(result_file, "w") as f:
+        _json.dump({
+            "FunctionResult": function_result,
+            "Error": error,
+            "Message": message,
+            "Traceback": traceback,
+        }, f)
+
+
+def run_agent_function(faasr, prompt, action_name, result_file):
     """
     Entry point for agent function execution.
 
@@ -62,6 +74,7 @@ def run_agent_function(faasr, prompt, action_name):
         faasr: FaaSr payload instance
         prompt: Natural language prompt for the agent
         action_name: Name of the action being executed (= faasr["FunctionInvoke"])
+        result_file: Path to write the result JSON for the executor to read
     """
     logger.info(f"Starting agent execution for {action_name}")
 
@@ -73,8 +86,11 @@ def run_agent_function(faasr, prompt, action_name):
                 "Could not determine LLM provider. Please set AGENT_KEY."
             )
 
+        snapshot = faasr_snapshot_existing_keys(faasr)
+        s3_ops = AgentS3Ops(faasr, snapshot)
+
         generator = AgentCodeGenerator(api_key, provider)
-        graph = _build_agent_graph(faasr, generator)
+        graph = _build_agent_graph(faasr, generator, s3_ops, result_file)
 
         stop_event = threading.Event()
         _start_duration_monitor(stop_event, faasr)
@@ -91,18 +107,19 @@ def run_agent_function(faasr, prompt, action_name):
             stop_event.set()
 
         result = final_state.get("eval_decision") != "abort"
-        faasr_return(result)
+        _write_agent_result(result_file, function_result=result)
 
     except Exception as e:
         err_msg = f"Agent execution failed: {str(e)}"
         traceback = tb_module.format_exc()
         logger.error(f"{err_msg}\n{traceback}")
-        faasr_exit(message=err_msg, traceback=traceback)
+        _write_agent_result(result_file, error=True, message=err_msg, traceback=traceback)
+        sys.exit(1)
     finally:
         flush_s3_log()
 
 
-def _build_agent_graph(faasr, generator: AgentCodeGenerator):
+def _build_agent_graph(faasr, generator: AgentCodeGenerator, s3_ops: AgentS3Ops, result_file: str):
     """Build the 4-node LangGraph execution flow."""
 
     def _node_query_registry(state: AgentGraphState) -> Dict[str, Any]:
@@ -134,17 +151,13 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             remote_file = parts[-1]
             local_path = str(Path(INPUT_DIR) / remote_file)
 
-            try:
-                faasr_get_file(
-                    faasr_payload=faasr,
-                    local_file=remote_file,
-                    remote_file=remote_file,
-                    local_folder=INPUT_DIR,
-                    remote_folder=remote_folder,
-                )
-            except Exception as e:
-                logger.warning(f"IO agent could not download {uri}: {e}")
-                continue
+            faasr_get_file(
+                faasr_payload=faasr,
+                local_file=remote_file,
+                remote_file=remote_file,
+                local_folder=INPUT_DIR,
+                remote_folder=remote_folder,
+            )
 
             # Download sidecar if available
             sidecar = {}
@@ -221,7 +234,7 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             code_path = Path(CODE_DIR) / f"{function_invoke}.py"
             if code_path.exists():
                 try:
-                    agent_put_file(
+                    s3_ops.agent_put_file(
                         local_file=code_path.name,
                         local_folder=str(code_path.parent),
                         remote_file=f"failed_{code_path.name}",
@@ -268,7 +281,8 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         parsed = _extract_json(raw)
         if parsed is None:
             logger.warning(f"Eval agent: JSON extraction failed on raw response: {raw[:500]}")
-        decision_data = parsed or {}
+            parsed = {"decision": "abort", "reasoning": "Eval agent returned unparseable response"}
+        decision_data = parsed
         decision = decision_data.get("decision", "continue")
         reasoning = decision_data.get("reasoning", "")
         file_descriptions = decision_data.get("file_descriptions", {})
@@ -289,20 +303,27 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
         if decision == "continue":
             function_invoke = state.get("function_invoke", "unknown")
             _write_manifest(faasr, state, file_descriptions, state.get("coding_result", {}).get("installed_packages", []))
-            _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions)
-            _upload_generated_code(function_invoke, _run_prefix(faasr))
+            _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions, s3_ops)
+            _upload_generated_code(function_invoke, _run_prefix(faasr), s3_ops)
 
-        # On loop_back: clear working dirs for retry
+        # On loop_back: clear working dirs and stale state for retry
         if decision == "loop_back":
             _clear_dir(OUTPUT_DIR)
             _clear_dir(INPUT_DIR)
+
+        loop_back_state_reset = {}
+        if decision == "loop_back":
+            loop_back_state_reset = {
+                "selected_uris": [],
+                "file_metadata": {},
+            }
 
         # Upload coding agent log to S3 (with invocation ID to make it unique)
         _log_file = Path("/tmp/agent/logs/coding_agent.log")
         if _log_file.exists():
             try:
                 invocation_id = faasr.get("InvocationID", "unknownID")
-                agent_put_file(
+                s3_ops.agent_put_file(
                     local_file=_log_file.name,
                     local_folder=str(_log_file.parent),
                     remote_file=f"{state.get('function_invoke', 'agent')}_{invocation_id}_coding_agent.log",
@@ -315,7 +336,19 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
             "eval_decision": decision,
             "eval_reasoning": reasoning,
             "loop_count": new_loop_count,
+            **loop_back_state_reset,
         }
+
+    def _eval_router(state: AgentGraphState) -> str:
+        decision = state.get("eval_decision", "continue")
+        if decision == "abort":
+            _write_agent_result(
+                result_file,
+                error=True,
+                message=state.get("eval_reasoning", "Agent aborted"),
+            )
+            return "abort"
+        return decision
 
     # Build graph
     graph = StateGraph(AgentGraphState)
@@ -335,16 +368,6 @@ def _build_agent_graph(faasr, generator: AgentCodeGenerator):
     )
 
     return graph.compile()
-
-
-# Routing
-
-def _eval_router(state: AgentGraphState) -> str:
-    decision = state.get("eval_decision", "continue")
-    if decision == "abort":
-        faasr_exit(message=state.get("eval_reasoning", "Agent aborted"))
-        return "abort"
-    return decision
 
 
 # IO agent helpers
@@ -499,8 +522,8 @@ def _write_manifest(faasr, state: Dict, file_descriptions: dict, installed_packa
         logger.warning(f"Could not write manifest: {e}")
 
 
-def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: dict = None):
-    """Upload all files in OUTPUT_DIR (including subdirectories) to S3 via agent_put_file."""
+def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: dict = None, s3_ops: "AgentS3Ops" = None):
+    """Upload all files in OUTPUT_DIR (including subdirectories) to S3."""
     output_path = Path(OUTPUT_DIR)
     if not output_path.exists():
         logger.warning("Output directory does not exist — nothing to upload")
@@ -508,16 +531,14 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
     remote_folder = f"{run_prefix}/{function_invoke}_outputs"
     descriptions = file_descriptions or {}
 
-    # Recursively find all files in output_dir and subdirectories
     for file in output_path.rglob("*"):
         if file.is_file():
-            # Preserve relative directory structure in remote folder
             rel = file.relative_to(output_path)
             rel_parent = rel.parent
             remote_subfolder = f"{remote_folder}/{rel_parent}" if str(rel_parent) != "." else remote_folder
 
             try:
-                agent_put_file(
+                s3_ops.agent_put_file(
                     local_file=file.name,
                     local_folder=str(file.parent),
                     remote_file=file.name,
@@ -529,7 +550,7 @@ def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: di
                 logger.error(f"Failed to upload {file.name}: {e}")
 
 
-def _upload_generated_code(function_invoke: str, run_prefix: str):
+def _upload_generated_code(function_invoke: str, run_prefix: str, s3_ops: "AgentS3Ops" = None):
     """Upload the generated code file from CODE_DIR to S3 for TUI display."""
     code_path = Path(CODE_DIR) / f"{function_invoke}.py"
     if not code_path.exists():
@@ -537,7 +558,7 @@ def _upload_generated_code(function_invoke: str, run_prefix: str):
         return
     remote_folder = f"{run_prefix}/{function_invoke}_outputs"
     try:
-        agent_put_file(
+        s3_ops.agent_put_file(
             local_file=code_path.name,
             local_folder=str(code_path.parent),
             remote_file=code_path.name,
@@ -565,8 +586,7 @@ def _start_duration_monitor(stop_event: threading.Event, faasr):
     def _monitor():
         if not stop_event.wait(800):  # stops function if still running after 800s
             logger.warning("Function approaching timeout — checkpointing")
-            _checkpoint_state_to_s3(faasr) # filler right now
-            faasr_extend()  # does nothing (todo fix)
+            _checkpoint_state_to_s3(faasr)
 
     threading.Thread(target=_monitor, daemon=True).start()
 
