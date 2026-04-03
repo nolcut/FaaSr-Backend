@@ -28,10 +28,10 @@ class FaaSrPayload:
     - Workflow is union of base workflow (from github) and overwritten fields
 
     - The URL points to a GitHub file containing the workflow JSON
-    - and follows the form {username}/{repo}/{path}.
+    - and follows the form {username}/{repo}/{path}
 
     - Methods to validate the workflow, replace secrets, check S3 data stores,
-    - init log, and self-abort.
+    - init log, and self-abort
 
     Top level changes (e.g. faasr_obj["FunctionInvoke"] = some_func)
     are tracked in self.overwritten and the scheduler will
@@ -361,6 +361,11 @@ class FaaSrPayload:
                 logger.error(err_msg)
                 sys.exit(1)
 
+    def init_immutable_registry(self):
+        """Initialize the global immutable registry from GlobalInputFiles/GlobalInputFolders."""
+        from FaaSr_py.s3_api.registry import init_immutable_registry as _init
+        _init(self)
+
     def abort_on_multiple_invocations(self, pre):
         """
         Invoked when the current function has multiple predecessors
@@ -512,6 +517,7 @@ class FaaSrPayload:
         # Initialize log if this is the first action in the workflow
         if len(pre) == 0:
             self.init_log_folder()
+            self.init_immutable_registry()
 
         # If there are more than 1 predecessor,
         # then only the final action invoked will sucessfully run

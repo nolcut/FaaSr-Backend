@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from multiprocessing import Process
 from pathlib import Path
 
@@ -40,7 +41,7 @@ class Executor:
         Arguments:
             action_name: str -- name of the action to run
         """
-        func_name = self.faasr["ActionList"][action_name]["FunctionName"]
+        func_name = self.faasr["ActionList"][action_name].get("FunctionName")
         func_type = self.faasr["ActionList"][action_name]["Type"]
         user_args = self._get_user_function_args(action_name)
 
@@ -102,7 +103,7 @@ class Executor:
 
             if func_res != 0:
                 raise RuntimeError(
-                    f"non-zero exit code ({func_res!r}) from user function"
+                    f"non-zero exit code ({func_res!r}) from function"
                 )
         else:
             logger.info("SKIPPING USER FUNCTION")
@@ -188,6 +189,56 @@ class Executor:
             logger.error(f"Built-in function {builtin_func_name} failed: {e}")
             raise
 
+    def _run_agent_function(self, action_name, args):
+        """
+        Execute an agent function that uses LLM to generate and run code.
+        Bypasses the RPC server entirely — result is communicated via a temp file.
+
+        Returns:
+            FunctionResult value from agent (bool or None)
+        """
+        prompt = args.get("prompt")
+        if not prompt:
+            raise ValueError(f"Agent action {action_name} missing 'prompt' argument")
+
+        result_file = f"/tmp/faasr_agent_result_{uuid.uuid4().hex}.json"
+        try:
+            from FaaSr_py.client.agent_func_entry import run_agent_function
+
+            logger.info(f"Starting agent: {action_name}")
+            agent_proc = Process(
+                target=run_agent_function,
+                args=(self.faasr, prompt, action_name, result_file),
+            )
+            agent_proc.start()
+            agent_proc.join()
+
+            return self._read_agent_result(result_file)
+        except Exception as e:
+            logger.error(f"Agent function {action_name} failed: {e}")
+            raise
+        finally:
+            Path(result_file).unlink(missing_ok=True)
+
+    def _read_agent_result(self, result_file: str):
+        """Read agent result from temp file and raise on error."""
+        try:
+            with open(result_file, "r") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            raise RuntimeError("Agent result file not written — agent may have crashed")
+        except Exception as e:
+            raise RuntimeError(f"Could not parse agent result: {e}")
+
+        if data.get("Error"):
+            msg = data.get("Message", "Agent failed")
+            tb = data.get("Traceback", "")
+            if tb:
+                logger.error(f"Agent traceback:\n{tb}")
+            raise RuntimeError(msg)
+
+        return data.get("FunctionResult")
+
     def run_func(self, action_name, start_time):
         """
         Fetch and run the users function
@@ -195,19 +246,33 @@ class Executor:
         Arguments:
             action_name: str -- name of the action to run
         """
-
         action_config = self.faasr["ActionList"].get(action_name, {})
+
         if action_config.get("_faasr_builtin", False):
             logger.info(f"Executing built-in function: {action_name}")
             return self._run_builtin_function(action_name, action_config)
-        
-        # For user functions, continue with existing logic
+
         logger.debug("Starting dependency install")
         action = self.faasr["ActionList"][action_name]
         faasr_func_dependancy_install(self.faasr, action)
         logger.debug("Finished installing dependencies")
 
-        # Run function
+        func_type = action_config.get("Type", "")
+
+        if func_type == "Agent":
+            # Agent path: no RPC server needed — credentials stay in this process
+            try:
+                user_args = self._get_user_function_args(action_name)
+                function_result = self._run_agent_function(action_name, user_args)
+            except Exception as e:
+                if isinstance(e, SystemExit):
+                    raise
+                logger.exception(e, stack_info=True)
+                sys.exit(1)
+            self._make_done(action_name)
+            return function_result
+
+        # Python / R path: use RPC server as before
         try:
             self._host_server_api(start_time=start_time)
             self._call(action_name)
@@ -218,7 +283,6 @@ class Executor:
             logger.exception(e, stack_info=True)
             sys.exit(1)
         finally:
-            # Clean up server
             self.terminate_server()
         return function_result
 

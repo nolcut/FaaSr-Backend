@@ -1,0 +1,404 @@
+{
+  "notes_for_llms": [
+    "Prefer faasr_get_file when the function needs to read an input artifact from S3 into local disk.",
+    "Prefer faasr_put_file when the function produced a local artifact and needs to persist it back to S3.",
+    "Use faasr_get_folder_list to discover available objects/prefixes before deciding which file(s) to download.",
+    "Use faasr_delete_file to clean up outputs or remove stale artifacts in S3.",
+    "Use faasr_log for debug/status messages; logs go to DefaultDataStore unless overridden by LoggingDataStore.",
+    "Use faasr_rank only in workflows that trigger concurrent executions using rank.",
+    "Use faasr_invocation_id when you need a unique identifier for the current action invocation (e.g., tagging logs/outputs)."
+  ],
+  "functions": [
+    {
+      "name": "faasr_get_file",
+      "summary": "Download a file from an S3 bucket to the local filesystem for use by the FaaSr function.",
+      "category": "storage.s3",
+      "usage_signature": "faasr_get_file(server_name, remote_folder, remote_file, local_folder, local_file)",
+      "parameters": [
+        {
+          "name": "server_name",
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "S3 bucket/datastore name declared in the workflow configuration JSON. If omitted, uses DefaultDataStore."
+        },
+        {
+          "name": "remote_folder",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Remote folder/prefix in the S3 bucket to download from."
+        },
+        {
+          "name": "remote_file",
+          "type": "string",
+          "required": true,
+          "description": "Name of the file to download from the S3 bucket."
+        },
+        {
+          "name": "local_folder",
+          "type": "string",
+          "required": false,
+          "default": ".",
+          "description": "Local folder where the downloaded file will be stored."
+        },
+        {
+          "name": "local_file",
+          "type": "string",
+          "required": true,
+          "description": "Local filename for the downloaded object."
+        }
+      ],
+      "defaults_and_resolution": {
+        "server_name": "DefaultDataStore (workflow config) if omitted",
+        "remote_folder": "",
+        "local_folder": "."
+      },
+      "returns": {
+        "type": "void",
+        "description": "Downloads the file; no return value specified in the documentation."
+      },
+      "side_effects": [
+        "Reads from S3 bucket",
+        "Writes a local file to local_folder/local_file"
+      ],
+      "examples": [
+        {
+          "code": "faasr_get_file(remote_folder=\"myfolder\", remote_file=\"myinput1.csv\", local_file=\"input1.csv\")"
+        },
+        {
+          "code": "faasr_get_file(server_name=\"My_Minio_Bucket\", remote_file=\"myinput2.csv\", local_file=\"input2.csv\")"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to load an input artifact from S3 into the function runtime",
+          "Preparing local data for processing (CSV, JSON, model files, etc.)"
+        ],
+        "common_pitfalls": [
+          "remote_file and local_file are required; remote_folder/local_folder have defaults",
+          "server_name must match a datastore name declared in workflow configuration"
+        ]
+      }
+    },
+    {
+      "name": "faasr_put_file",
+      "summary": "Upload a local file from the FaaSr function runtime to an S3 bucket.",
+      "category": "storage.s3",
+      "usage_signature": "faasr_put_file(server_name, local_folder, local_file, remote_folder, remote_file)",
+      "parameters": [
+        {
+          "name": "server_name",
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "S3 bucket/datastore name declared in the workflow configuration JSON. If omitted, uses DefaultDataStore."
+        },
+        {
+          "name": "local_folder",
+          "type": "string",
+          "required": false,
+          "default": ".",
+          "description": "Local folder where the file to upload is located."
+        },
+        {
+          "name": "local_file",
+          "type": "string",
+          "required": true,
+          "description": "Local filename to upload."
+        },
+        {
+          "name": "remote_folder",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Remote folder/prefix in the S3 bucket to upload into."
+        },
+        {
+          "name": "remote_file",
+          "type": "string",
+          "required": true,
+          "description": "Remote filename for the uploaded object."
+        }
+      ],
+      "defaults_and_resolution": {
+        "server_name": "DefaultDataStore (workflow config) if omitted",
+        "remote_folder": "",
+        "local_folder": "."
+      },
+      "returns": {
+        "type": "void",
+        "description": "Uploads the file; no return value specified in the documentation."
+      },
+      "side_effects": [
+        "Reads a local file from local_folder/local_file",
+        "Writes to S3 bucket at remote_folder/remote_file"
+      ],
+      "examples": [
+        {
+          "code": "faasr_put_file(local_file=\"output.csv\", remote_folder=\"myfolder\", remote_file=\"myoutput.csv\")"
+        },
+        {
+          "code": "faasr_get_file(server_name=\"My_Minio_Bucket\", local_file=\"output.csv\", remote_file=\"myoutput.csv\")"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to persist function outputs (CSV, figures, logs, model artifacts) back to S3",
+          "Export intermediate artifacts for downstream workflow steps"
+        ],
+        "common_pitfalls": [
+          "local_file and remote_file are required",
+          "server_name must match a datastore name declared in workflow configuration"
+        ]
+      }
+    },
+    {
+      "name": "faasr_get_folder_list",
+      "summary": "List the contents of a folder/prefix in the S3 bucket.",
+      "category": "storage.s3",
+      "usage_signature": "folderlist = faasr_get_folder_list(server_name, faasr_prefix)",
+      "parameters": [
+        {
+          "name": "server_name",
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "S3 bucket/datastore name declared in the workflow configuration JSON. If omitted, uses DefaultDataStore."
+        },
+        {
+          "name": "faasr_prefix",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Prefix representing the folder path in the S3 bucket."
+        }
+      ],
+      "defaults_and_resolution": {
+        "server_name": "DefaultDataStore (workflow config) if omitted",
+        "faasr_prefix": ""
+      },
+      "returns": {
+        "type": "list",
+        "description": "A list with the contents of the specified S3 prefix/folder."
+      },
+      "side_effects": [
+        "Reads object metadata/listing from S3 bucket"
+      ],
+      "examples": [
+        {
+          "code": "mylist1 = faasr_get_folder_list(server_name=\"My_Minio_Bucket\", faasr_prefix=\"myfolder\")"
+        },
+        {
+          "code": "mylist2 = faasr_get_folder_list(server_name=\"My_Minio_Bucket\", faasr_prefix=\"myfolder/mysubfolder\")"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to discover which files exist before downloading",
+          "Need to iterate over many files in a prefix",
+          "Need to validate outputs exist after a workflow step"
+        ],
+        "common_pitfalls": [
+          "faasr_prefix defaults to empty string, which may list the bucket root/prefix"
+        ]
+      }
+    },
+    {
+      "name": "faasr_delete_file",
+      "summary": "Delete a file from the S3 bucket.",
+      "category": "storage.s3",
+      "usage_signature": "faasr_delete_file(server_name, remote_folder, remote_file)",
+      "parameters": [
+        {
+          "name": "server_name",
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "S3 bucket/datastore name declared in the workflow configuration JSON. If omitted, uses DefaultDataStore."
+        },
+        {
+          "name": "remote_folder",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Remote folder/prefix in the S3 bucket to delete from."
+        },
+        {
+          "name": "remote_file",
+          "type": "string",
+          "required": true,
+          "description": "Remote filename of the object to delete."
+        }
+      ],
+      "defaults_and_resolution": {
+        "server_name": "DefaultDataStore (workflow config) if omitted",
+        "remote_folder": ""
+      },
+      "returns": {
+        "type": "void",
+        "description": "Deletes the file; no return value specified in the documentation."
+      },
+      "side_effects": [
+        "Removes an object from S3 bucket at remote_folder/remote_file"
+      ],
+      "examples": [
+        {
+          "code": "faasr_delete_file(remote_folder=\"myfolder\", remote_file=\"myoutput.csv\")"
+        },
+        {
+          "code": "faasr_delete_file(server_name=\"My_Minio_Bucket\", remote_file=\"myoutput.csv\")"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to remove stale or temporary artifacts from S3",
+          "Cleanup step after validation or retries"
+        ],
+        "common_pitfalls": [
+          "Be careful with remote_folder default \"\" to avoid deleting an unintended object name"
+        ]
+      }
+    },
+    {
+      "name": "faasr_log",
+      "summary": "Write a log message to a file in the S3 bucket to aid debugging.",
+      "category": "observability.logging",
+      "usage_signature": "faasr_log(log_message)",
+      "parameters": [
+        {
+          "name": "log_message",
+          "type": "string",
+          "required": true,
+          "description": "Message to be written to the log."
+        }
+      ],
+      "defaults_and_resolution": {
+        "log_datastore": "DefaultDataStore unless overridden by LoggingDataStore (workflow config)"
+      },
+      "returns": {
+        "type": "void",
+        "description": "Writes a log entry; no return value specified in the documentation."
+      },
+      "side_effects": [
+        "Appends/writes a log message to a log file stored in S3 (datastore depends on config)"
+      ],
+      "examples": [
+        {
+          "code": "log_msg = f\"Function compute_sum finished; output written to {folder}/{output} in default S3 bucket\"\nfaasr_log(log_msg)"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to record progress, debugging info, or key variables in long pipelines",
+          "Need persistent logs across ephemeral function invocations"
+        ],
+        "common_pitfalls": [
+          "Logging location is determined by workflow configuration (DefaultDataStore/LoggingDataStore)"
+        ]
+      }
+    },
+    {
+      "name": "faasr_rank",
+      "summary": "Return the rank metadata for concurrent rank-based workflow invocations.",
+      "category": "runtime.concurrency",
+      "usage_signature": "faasr_rank()",
+      "applicability": "Only for workflows where functions are triggered for concurrent execution using rank.",
+      "parameters": [],
+      "returns": {
+        "type": "object",
+        "description": "Dictionary with keys max_rank and rank.",
+        "properties": {
+          "max_rank": {
+            "type": "integer",
+            "description": "Maximum number of concurrent invocations (N)."
+          },
+          "rank": {
+            "type": "integer",
+            "description": "This invocation's rank, typically in [1..N]."
+          }
+        }
+      },
+      "side_effects": [],
+      "examples": [
+        {
+          "code": "rank_list = faasr_rank()\nmy_rank = rank_list[\"rank\"]\nmax_rank = rank_list[\"max_rank\"]\nlocal_file = f\"myinput_{my_rank}.csv\"\ndf.to_csv(local_file, index=False)"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need to shard work across N concurrent invocations",
+          "Need rank-indexed file naming (e.g., myoutput_1.csv ... myoutput_N.csv)"
+        ],
+        "common_pitfalls": [
+          "Do not call in non-rank workflows unless you know rank-based triggering is enabled"
+        ]
+      }
+    },
+    {
+      "name": "faasr_invocation_id",
+      "summary": "Return the current action's invocation ID.",
+      "category": "runtime.metadata",
+      "usage_signature": "faasr_invocation_id()",
+      "parameters": [],
+      "returns": {
+        "type": "string",
+        "description": "A unique identifier for this action invocation."
+      },
+      "side_effects": [],
+      "examples": [
+        {
+          "code": "invocation_id = faasr_invocation_id()\nprint(invocation_id)"
+        }
+      ],
+      "llm_selection_hints": {
+        "when_to_use": [
+          "Need a unique ID to tag outputs, logs, or trace execution",
+          "Need correlation across steps for debugging"
+        ]
+      }
+    }
+  ],
+  "function_index": {
+    "by_category": {
+      "storage.s3": [
+        "faasr_get_file",
+        "faasr_put_file",
+        "faasr_get_folder_list",
+        "faasr_delete_file"
+      ],
+      "observability.logging": [
+        "faasr_log"
+      ],
+      "runtime.concurrency": [
+        "faasr_rank"
+      ],
+      "runtime.metadata": [
+        "faasr_invocation_id"
+      ]
+    },
+    "by_intent": {
+      "download_inputs": [
+        "faasr_get_file"
+      ],
+      "upload_outputs": [
+        "faasr_put_file"
+      ],
+      "list_remote_contents": [
+        "faasr_get_folder_list"
+      ],
+      "cleanup_remote_artifacts": [
+        "faasr_delete_file"
+      ],
+      "debug_or_status_logging": [
+        "faasr_log"
+      ],
+      "parallel_sharding": [
+        "faasr_rank"
+      ],
+      "traceability": [
+        "faasr_invocation_id"
+      ]
+    }
+  }
+}

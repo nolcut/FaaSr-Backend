@@ -198,6 +198,26 @@ def faasr_invocation_id():
         sys.exit(1)
 
 
+def faasr_workflow_name():
+    """
+    Get the workflowname for the current workflow
+
+    Returns:
+        str -- workflow name
+    """
+    request_json = {"ProcedureID": "faasr_workflow_name", "Arguments": {}}
+    r = requests.post("http://127.0.0.1:8000/faasr-action", json=request_json)
+    try:
+        response = r.json()
+        return response["Data"]["workflow_name"]
+    except Exception as e:
+        err_msg = (
+            f"{{faasr_invocation_id: failed to get workflow name from server -- {e}}}"
+        )
+        print(err_msg)
+        sys.exit(1)
+
+
 def faasr_return(return_value=None):
     """
     Returns the result of the user function to the FaaSr server
@@ -220,6 +240,11 @@ def faasr_return(return_value=None):
         )
         print(err_msg)
         sys.exit(1)
+
+
+def faasr_extend():
+    """Request an extension of function execution time. Stub — not yet implemented."""
+    pass
 
 
 def faasr_exit(message=None, error=True, traceback=None):

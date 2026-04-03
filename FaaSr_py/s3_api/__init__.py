@@ -4,6 +4,7 @@ from .get_folder_list import faasr_get_folder_list
 from .get_s3_creds import faasr_get_s3_creds
 from .log import faasr_log
 from .put_file import faasr_put_file
+from .registry import faasr_registry_add, faasr_registry_query, faasr_registry_remove
 import os
 
 # Set environment variables for compatibility with OSN and other S3-compatible services
@@ -19,4 +20,7 @@ __all__ = [
     "faasr_delete_file",
     "faasr_get_folder_list",
     "faasr_get_s3_creds",
+    "faasr_registry_query",
+    "faasr_registry_add",
+    "faasr_registry_remove",
 ]

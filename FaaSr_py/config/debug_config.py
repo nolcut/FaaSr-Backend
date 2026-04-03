@@ -87,6 +87,9 @@ class Config:
             faasr_payload=faasr_payload, level=level, start_time=start_time
         )
 
+        # Replace all existing handlers — prevents inheriting duplicates from parent process
+        logger.handlers.clear()
+
         # Filter out 3rd party packages
         s3_log_handler.addFilter(FaaSrFilter())
 

@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 
 import requests
@@ -16,23 +17,16 @@ from FaaSr_py.s3_api import (
     faasr_get_s3_creds,
     faasr_log,
     faasr_put_file,
+    faasr_registry_remove,
 )
 
 logger = logging.getLogger(__name__)
 faasr_api = FastAPI()
-valid_functions = {
-    "faasr_get_file",
-    "faasr_put_file",
-    "faasr_delete_file",
-    "faasr_get_folder_list",
-    "faasr_log",
-    "faasr_rank",
-}
-
 
 class Request(BaseModel):
     ProcedureID: str
     Arguments: dict | None = None
+    IsAgentRequest: bool = False
 
 
 class Response(BaseModel):
@@ -72,9 +66,7 @@ def register_request_handler(faasr_payload):
 
     @faasr_api.post("/faasr-action")
     def faasr_request_handler(request: Request):
-        """
-        Handler for FaaSr function requests
-        """
+        """Handler for FaaSr function requests (Python/R user functions only)."""
         nonlocal error
         logger.info(f"Processing request: {request.ProcedureID}")
 
@@ -85,17 +77,25 @@ def register_request_handler(faasr_payload):
                 case "faasr_log":
                     faasr_log(faasr_payload=faasr_payload, **args)
                 case "faasr_put_file":
-                    faasr_put_file(faasr_payload=faasr_payload, **args)
+                    put_file_args = {k: v for k, v in args.items() if k != "description"}
+                    faasr_put_file(faasr_payload=faasr_payload, **put_file_args)
                 case "faasr_get_file":
                     faasr_get_file(faasr_payload=faasr_payload, **args)
                 case "faasr_delete_file":
                     faasr_delete_file(faasr_payload=faasr_payload, **args)
+                    file_uri = re.sub(
+                        r"/+", "/",
+                        f"{args.get('remote_folder', '.')}/{args.get('remote_file', '')}"
+                    ).lstrip("/")
+                    faasr_registry_remove(faasr_payload, file_uri=file_uri)
                 case "faasr_get_folder_list":
                     return_obj.Data["folder_list"] = faasr_get_folder_list(
                         faasr_payload=faasr_payload, **args
                     )
                 case "faasr_invocation_id":
                     return_obj.Data["invocation_id"] = faasr_payload.get("InvocationID", "")
+                case "faasr_workflow_name":
+                    return_obj.Data["workflow_name"] = faasr_payload.get("WorkflowName", "")
                 case "faasr_rank":
                     return_obj.Data = faasr_rank(faasr_payload=faasr_payload)
                 case "faasr_get_s3_creds":
@@ -113,7 +113,6 @@ def register_request_handler(faasr_payload):
             logger.error(err_msg)
             error = True
             sys.exit(1)
-        # flush log after every function, since we don't know when user function will end
         flush_s3_log()
         return return_obj
 
@@ -160,6 +159,7 @@ def faasr_echo(message: str):
     Echo to poll server
     """
     return {"message": message}
+
 
 
 def wait_for_server_start(port):

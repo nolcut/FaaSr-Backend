@@ -1,0 +1,860 @@
+import csv
+import datetime
+import json
+import logging
+import os
+import shutil
+import sys
+import threading
+import traceback as tb_module
+from pathlib import Path
+from typing import Any, Dict, List, TypedDict
+
+from langgraph.graph import END, StateGraph
+
+from FaaSr_py.client.agent_prompts import EVAL_SYSTEM_PROMPT, IO_SYSTEM_PROMPT
+from FaaSr_py.client.agent_s3_ops import AgentS3Ops
+from FaaSr_py.client.coding_agent_backend import get_coding_backend
+from FaaSr_py.helpers.agent_helper import AgentCodeGenerator, get_agent_api_key, get_agent_provider
+from FaaSr_py.helpers.cache_keys import compute_cache_keys
+from FaaSr_py.helpers.s3_helper_functions import flush_s3_log
+from FaaSr_py.s3_api import faasr_get_file, faasr_put_file
+from FaaSr_py.s3_api.registry import faasr_registry_query, faasr_snapshot_existing_keys
+
+logger = logging.getLogger(__name__)
+
+INPUT_DIR = "/tmp/agent/input"
+OUTPUT_DIR = "/tmp/agent/output"
+CODE_DIR = "/tmp/agent/code"
+LOGS_DIR = "/tmp/agent/logs"
+INSTALLED_PACKAGES_FILE = "/tmp/agent/installed_packages.json"
+
+IO_TEMP = 0.0
+CODING_TEMP = 0.2
+EVALUATOR_TEMP = 0.0
+SAMPLE_BUDGET_CHARS = 20_000   # total chars sampled across all selected files
+
+
+def _run_prefix(faasr) -> str:
+    """Build a run-scoped S3 prefix: {workflow_name}/{invocation_id}"""
+    wf = faasr.get("WorkflowName", "workflow")
+    inv = faasr.get("InvocationID", "unknown")
+    return f"{wf}/{inv}"
+
+
+class AgentGraphState(TypedDict, total=False):
+    prompt: str
+    function_invoke: str            # = faasr["FunctionInvoke"]
+    workflow_spec: Dict[str, Any]   # faasr["ActionList"][faasr["FunctionInvoke"]]
+    registry_entries: List[Dict]    # upstream registry entries (schema_uri included)
+    selected_uris: List[str]        # file URIs chosen by IO agent LLM
+    file_metadata: Dict[str, Any]   # {uri: {local_path, sidecar, sample}}
+    coding_result: Dict[str, Any]   # {success, exception}
+    eval_decision: str              # "continue" | "loop_back" | "abort"
+    eval_reasoning: str
+    loop_count: int
+
+
+def _write_agent_result(result_file: str, function_result=None, error: bool = False, message: str = None, traceback: str = None):
+    """Write agent result to a file for the executor to read."""
+    import json as _json
+    with open(result_file, "w") as f:
+        _json.dump({
+            "FunctionResult": function_result,
+            "Error": error,
+            "Message": message,
+            "Traceback": traceback,
+        }, f)
+
+
+def run_agent_function(faasr, prompt, action_name, result_file):
+    """
+    Entry point for agent function execution.
+
+    Arguments:
+        faasr: FaaSr payload instance
+        prompt: Natural language prompt for the agent
+        action_name: Name of the action being executed (= faasr["FunctionInvoke"])
+        result_file: Path to write the result JSON for the executor to read
+    """
+    logger.info(f"Starting agent execution for {action_name}")
+
+    try:
+        snapshot = faasr_snapshot_existing_keys(faasr)
+        s3_ops = AgentS3Ops(faasr, snapshot)
+
+        # Check cache before running the full LLM pipeline
+        cache_hit = _check_cache_hit(faasr, action_name)
+        if cache_hit is not None:
+            cache_key, cached_code, cached_manifest = cache_hit
+            logger.info(f"Cache hit for {action_name} (key={cache_key[:12]}...) -- re-executing cached code")
+            _run_cached_action(faasr, action_name, cached_code, cached_manifest, s3_ops, result_file)
+            return
+
+        api_key = get_agent_api_key()
+        provider = get_agent_provider()
+        if not provider:
+            raise RuntimeError(
+                "Could not determine LLM provider. Please set AGENT_KEY."
+            )
+
+        generator = AgentCodeGenerator(api_key, provider)
+        graph = _build_agent_graph(faasr, generator, s3_ops, result_file)
+
+        stop_event = threading.Event()
+        _start_duration_monitor(stop_event, faasr)
+
+        try:
+            final_state = graph.invoke(
+                {
+                    "prompt": prompt,
+                    "function_invoke": faasr["FunctionInvoke"],
+                    "loop_count": 0,
+                }
+            )
+        finally:
+            stop_event.set()
+
+        result = final_state.get("eval_decision") != "abort"
+        _write_agent_result(result_file, function_result=result)
+
+    except BaseException as e:  # catches SystemExit too
+        err_msg = f"Agent execution failed: {str(e)}"
+        traceback = tb_module.format_exc()
+        logger.error(f"{err_msg}\n{traceback}")
+        _write_agent_result(result_file, error=True, message=err_msg, traceback=traceback)
+        sys.exit(1)
+    finally:
+        flush_s3_log()
+
+
+def _build_agent_graph(faasr, generator: AgentCodeGenerator, s3_ops: AgentS3Ops, result_file: str):
+    """Build the 4-node LangGraph execution flow."""
+
+    def _node_query_registry(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Node: query_registry")
+        entries = faasr_registry_query(faasr, action_name=state["function_invoke"])
+        workflow_spec = faasr["ActionList"].get(state["function_invoke"], {})
+        return {"registry_entries": entries, "workflow_spec": workflow_spec}
+
+    def _node_io_agent(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Node: io_agent")
+        registry_entries = state.get("registry_entries", [])
+        prompt = state.get("prompt", "")
+
+        # LLM selects which file URIs to download
+        selected_uris = _select_files(generator, prompt, registry_entries)
+        logger.info(f"IO agent selected {len(selected_uris)} files")
+
+        # Build URI→entry lookup for schema_uri
+        uri_to_entry = {e.get("file_uri", ""): e for e in registry_entries}
+
+        # Download files + inspect
+        os.makedirs(INPUT_DIR, exist_ok=True)
+        file_metadata: Dict[str, Any] = {}
+        per_file_chars = SAMPLE_BUDGET_CHARS // len(selected_uris) if selected_uris else 0
+
+        for uri in selected_uris:
+            parts = uri.rsplit("/", 1)
+            remote_folder = parts[0] if len(parts) == 2 else "."
+            remote_file = parts[-1]
+            local_path = str(Path(INPUT_DIR) / remote_file)
+
+            faasr_get_file(
+                faasr_payload=faasr,
+                local_file=remote_file,
+                remote_file=remote_file,
+                local_folder=INPUT_DIR,
+                remote_folder=remote_folder,
+            )
+
+            # Download sidecar if available
+            sidecar = {}
+            entry = uri_to_entry.get(uri, {})
+            schema_uri = entry.get("schema_uri", "")
+            if schema_uri:
+                sidecar_parts = schema_uri.rsplit("/", 1)
+                sidecar_remote_folder = sidecar_parts[0] if len(sidecar_parts) == 2 else "."
+                sidecar_remote_file = sidecar_parts[-1]
+                sidecar_local = str(Path(INPUT_DIR) / sidecar_remote_file)
+                try:
+                    faasr_get_file(
+                        faasr_payload=faasr,
+                        local_file=sidecar_remote_file,
+                        remote_file=sidecar_remote_file,
+                        local_folder=INPUT_DIR,
+                        remote_folder=sidecar_remote_folder,
+                    )
+                    with open(sidecar_local, "r") as f:
+                        sidecar = json.load(f)
+                except Exception as e:
+                    logger.warning(f"IO agent could not download sidecar for {uri}: {e}")
+
+            sample = _sample_file(local_path, sidecar, per_file_chars)
+            file_metadata[uri] = {
+                "local_path": local_path,
+                "sidecar": sidecar,
+                "sample": sample,
+            }
+
+        logger.info(f"IO agent file inventory: {list(file_metadata.keys())}")
+        return {"selected_uris": selected_uris, "file_metadata": file_metadata}
+
+    def _node_coding_agent(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Node: coding_agent")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        eval_reasoning = state.get("eval_reasoning", "")
+        loop_count = state.get("loop_count", 0)
+        if eval_reasoning:
+            logger.info(f"Passing eval feedback to coding agent (loop {loop_count}): {eval_reasoning}")
+
+        # Only pass registry entries for files that were actually selected (to reduce payload)
+        selected_uris = set(state.get("selected_uris", []))
+        all_registry_entries = state.get("registry_entries", [])
+        relevant_entries = [e for e in all_registry_entries if e.get("file_uri") in selected_uris]
+
+        context = {
+            "prompt": state.get("prompt", ""),
+            "function_invoke": state.get("function_invoke", ""),
+            "registry_entries": relevant_entries,
+            "file_metadata": state.get("file_metadata", {}),
+            "input_dir": INPUT_DIR,
+            "output_dir": OUTPUT_DIR,
+            "code_dir": CODE_DIR,
+            "logs_dir": LOGS_DIR,
+            "temperature": CODING_TEMP,
+            "eval_feedback": eval_reasoning,
+            "exception": state.get("coding_result", {}).get("exception", ""),
+            "loop_count": loop_count,
+        }
+        result = get_coding_backend().run(context)
+        logger.info(f"Coding agent finished: success={result.success}")
+
+        installed_packages = []
+        try:
+            pkg_file = Path(INSTALLED_PACKAGES_FILE)
+            if pkg_file.exists():
+                installed_packages = json.loads(pkg_file.read_text())
+        except Exception:
+            pass
+
+        if not result.success:
+            function_invoke = state.get("function_invoke", "coding_agent")
+            code_path = Path(CODE_DIR) / f"{function_invoke}.py"
+            if code_path.exists():
+                try:
+                    s3_ops.agent_put_file(
+                        local_file=code_path.name,
+                        local_folder=str(code_path.parent),
+                        remote_file=f"failed_{code_path.name}",
+                        remote_folder=f"{_run_prefix(faasr)}/{function_invoke}_outputs",
+                    )
+                    logger.info(f"Uploaded failed code as failed_{code_path.name}")
+                except Exception as e:
+                    logger.warning(f"Could not upload failed code: {e}")
+
+        return {"coding_result": {"success": result.success, "exception": result.exception, "installed_packages": installed_packages}}
+
+    def _node_eval_agent(state: AgentGraphState) -> Dict[str, Any]:
+        logger.info("Node: eval_agent")
+        coding_result = state.get("coding_result", {})
+        prompt = state.get("prompt", "")
+        loop_count = state.get("loop_count", 0)
+
+        # Summarise output directory
+        output_summary = _summarise_output_dir()
+
+        # LLM evaluation
+        system_prompt = EVAL_SYSTEM_PROMPT
+        coding_log = ""
+        _log_file = Path("/tmp/agent/logs/coding_agent.log")
+        if _log_file.exists():
+            try:
+                log_text = _log_file.read_text()
+                if log_text:
+                    coding_log = f"\nCoding agent log:\n{log_text}\n"
+            except Exception:
+                pass
+
+        today_str = datetime.date.today().isoformat()
+        eval_prompt = (
+            f"Today's date: {today_str}\n\n"
+            f"User task: {prompt}\n\n"
+            f"Coding agent success: {coding_result.get('success')}\n"
+            f"Exception: {coding_result.get('exception') or 'none'}\n"
+            f"{coding_log}"
+            f"\nOutput directory contents:\n{output_summary}"
+        )
+        raw = generator.generate_text(eval_prompt, system_prompt, temperature=EVALUATOR_TEMP)
+        logger.debug(f"Eval LLM raw response:\n{raw}")
+        parsed = _extract_json(raw)
+        if parsed is None:
+            logger.warning(f"Eval agent: JSON extraction failed on raw response: {raw[:500]}")
+            parsed = {"decision": "abort", "reasoning": "Eval agent returned unparseable response"}
+        decision_data = parsed
+        decision = decision_data.get("decision", "continue")
+        reasoning = decision_data.get("reasoning", "")
+        file_descriptions = decision_data.get("file_descriptions", {})
+
+        logger.info(f"Eval decision: {decision} | reasoning: {reasoning}")
+        logger.info(f"Output summary:\n{output_summary}")
+        logger.debug(f"File descriptions: {file_descriptions}")
+
+        # Enforce max 1 loopback
+        if decision == "loop_back" and loop_count >= 1:
+            logger.warning(f"Max loopbacks reached — last reasoning: {reasoning}")
+            decision = "abort"
+            reasoning = f"Max loopbacks reached — {reasoning}"
+
+        new_loop_count = loop_count + (1 if decision == "loop_back" else 0)
+
+        # On continue: write manifest then upload outputs
+        if decision == "continue":
+            function_invoke = state.get("function_invoke", "unknown")
+            _write_manifest(faasr, state, file_descriptions, state.get("coding_result", {}).get("installed_packages", []))
+            _upload_outputs(function_invoke, _run_prefix(faasr), file_descriptions, s3_ops)
+            _write_cache(function_invoke, faasr)
+
+        # On loop_back: clear working dirs and stale state for retry
+        if decision == "loop_back":
+            _clear_dir(OUTPUT_DIR)
+            _clear_dir(INPUT_DIR)
+
+        loop_back_state_reset = {}
+        if decision == "loop_back":
+            loop_back_state_reset = {
+                "selected_uris": [],
+                "file_metadata": {},
+            }
+
+        # Upload coding agent log to S3 (with invocation ID to make it unique)
+        _log_file = Path("/tmp/agent/logs/coding_agent.log")
+        if _log_file.exists():
+            try:
+                invocation_id = faasr.get("InvocationID", "unknownID")
+                s3_ops.agent_put_file(
+                    local_file=_log_file.name,
+                    local_folder=str(_log_file.parent),
+                    remote_file=f"{state.get('function_invoke', 'agent')}_{invocation_id}_coding_agent.log",
+                    remote_folder=f"{_run_prefix(faasr)}/{state.get('function_invoke', 'agent')}_logs",
+                )
+            except Exception as e:
+                logger.warning(f"Could not upload coding agent log: {e}")
+
+        return {
+            "eval_decision": decision,
+            "eval_reasoning": reasoning,
+            "loop_count": new_loop_count,
+            **loop_back_state_reset,
+        }
+
+    def _eval_router(state: AgentGraphState) -> str:
+        decision = state.get("eval_decision", "continue")
+        if decision == "abort":
+            _write_agent_result(
+                result_file,
+                error=True,
+                message=state.get("eval_reasoning", "Agent aborted"),
+            )
+            return "abort"
+        return decision
+
+    # Build graph
+    graph = StateGraph(AgentGraphState)
+    graph.add_node("query_registry", _node_query_registry)
+    graph.add_node("io_agent", _node_io_agent)
+    graph.add_node("coding_agent", _node_coding_agent)
+    graph.add_node("eval_agent", _node_eval_agent)
+
+    graph.set_entry_point("query_registry")
+    graph.add_edge("query_registry", "io_agent")
+    graph.add_edge("io_agent", "coding_agent")
+    graph.add_edge("coding_agent", "eval_agent")
+    graph.add_conditional_edges(
+        "eval_agent",
+        _eval_router,
+        {"continue": END, "loop_back": "io_agent", "abort": END},
+    )
+
+    return graph.compile()
+
+
+# IO agent helpers
+
+def _select_files(
+    generator: AgentCodeGenerator,
+    prompt: str,
+    registry_entries: List[Dict],
+) -> List[str]:
+    """Ask the LLM to select file URIs from registry entries."""
+    if not registry_entries:
+        return []
+
+    # Show uri + name + description; LLM returns full URIs directly
+    visible_entries = [
+        {"uri": e.get("file_uri", ""), "name": e.get("name", ""), "description": e.get("description", "")}
+        for e in registry_entries
+    ]
+    valid_uris = {e.get("file_uri", "") for e in registry_entries}
+
+    system_prompt = IO_SYSTEM_PROMPT
+    selection_prompt = (
+        f"Task: {prompt}\n\n"
+        f"Registry entries:\n"
+        + "\n".join(f"- uri={e['uri']} name={e['name']}: {e['description']}" for e in visible_entries)
+    )
+
+    raw = generator.generate_text(selection_prompt, system_prompt, temperature=IO_TEMP)
+    data = _extract_json(raw) or {}
+    logger.debug(f"IO selection rationale: {data.get('rationale', '')}")
+    # Validate returned URIs against the known set to prevent hallucination
+    all_returned = data.get("uris", [])
+    dropped = [u for u in all_returned if u not in valid_uris]
+    if dropped:
+        logger.warning(f"IO agent dropped {len(dropped)} hallucinated URIs: {dropped}")
+    uris = [u for u in all_returned if u in valid_uris]
+    logger.info(f"IO agent selected URIs: {uris}")
+    return uris
+
+
+def _sample_file(local_path: str, sidecar: dict, max_chars: int) -> str:
+    """
+    Return a representative sample of the file's content, guided by the sidecar
+    schema when available. Truncated to max_chars to keep coding agent context bounded.
+    """
+    if max_chars <= 0:
+        return ""
+    try:
+        if local_path.endswith(".json"):
+            with open(local_path, "r", encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                keys = sidecar.get("properties", {}).keys() if sidecar else data.keys()
+                sample = {k: data[k] for k in list(keys)[:5] if k in data}
+                result = json.dumps(sample, indent=2)
+            elif isinstance(data, list):
+                result = json.dumps(data[:3], indent=2)
+            else:
+                result = str(data)[:max_chars]
+            return result[:max_chars]
+
+        if local_path.endswith(".csv"):
+            with open(local_path, "r", encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f)
+                rows = [next(reader, [])]  # header
+                rows += [next(reader, []) for _ in range(3)]
+            result = "\n".join(",".join(row) for row in rows if row)
+            return result[:max_chars]
+
+        # Binary/image files — no sampling
+        return ""
+
+    except Exception as e:
+        logger.warning(f"Could not sample {local_path}: {e}")
+        return ""
+
+
+# Eval agent helpers
+
+def _summarise_output_dir() -> str:
+    """List output files and provide a brief JSON summary for each."""
+    output_path = Path(OUTPUT_DIR)
+    if not output_path.exists():
+        return "(output directory does not exist)"
+    files = [f for f in output_path.rglob("*") if f.is_file()]
+    if not files:
+        return "(output directory is empty)"
+    lines = []
+    for f in files:
+        rel = str(f.relative_to(output_path))
+        if f.suffix == ".json":
+            try:
+                with open(f, "r") as fp:
+                    data = json.load(fp)
+                if isinstance(data, dict):
+                    keys = list(data.keys())[:30]
+                    lines.append(f"{rel}: JSON object with keys {keys}")
+                elif isinstance(data, list):
+                    lines.append(f"{rel}: JSON array with {len(data)} items")
+                else:
+                    lines.append(f"{rel}: {type(data).__name__}")
+            except Exception:
+                lines.append(f"{rel}: (unreadable JSON)")
+        else:
+            lines.append(f"{rel}: {f.stat().st_size} bytes")
+    return "\n".join(lines)
+
+
+def _write_manifest(faasr, state: Dict, file_descriptions: dict, installed_packages: list = None) -> None:
+    """Write manifest.json to OUTPUT_DIR recording I/O for static export."""
+    try:
+        function_invoke = state.get("function_invoke", "unknown")
+        selected_uris = state.get("selected_uris", [])
+        file_metadata = state.get("file_metadata", {})
+
+        # Build inputs list from IO agent's selected files
+        inputs = []
+        for uri in selected_uris:
+            parts = uri.rsplit("/", 1)
+            remote_folder = parts[0] if len(parts) == 2 else "."
+            remote_file = parts[-1]
+            meta = file_metadata.get(uri, {})
+            local_path = meta.get("local_path", "")
+            local_file = Path(local_path).name if local_path else remote_file
+            inputs.append({
+                "uri": uri,
+                "remote_folder": remote_folder,
+                "remote_file": remote_file,
+                "local_file": local_file,
+            })
+
+        # Build outputs list from OUTPUT_DIR contents
+        outputs = []
+        output_path = Path(OUTPUT_DIR)
+        if output_path.exists():
+            for f in output_path.rglob("*"):
+                if f.is_file() and f.name != "manifest.json":
+                    outputs.append(str(f.relative_to(output_path)))
+
+        # Merge declared and runtime-installed packages, no duplicates
+        declared = faasr.get("PyPIPackageDownloads", {}).get(function_invoke, [])
+        runtime = installed_packages or []
+        packages = list(dict.fromkeys(declared + runtime))
+
+        manifest = {"inputs": inputs, "outputs": outputs, "packages": packages}
+        manifest_path = output_path / "manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+
+        logger.info(f"Wrote I/O manifest: {len(inputs)} inputs, {len(outputs)} outputs")
+    except Exception as e:
+        logger.warning(f"Could not write manifest: {e}")
+
+
+def _upload_outputs(function_invoke: str, run_prefix: str, file_descriptions: dict = None, s3_ops: "AgentS3Ops" = None):
+    """Upload all files in OUTPUT_DIR (including subdirectories) to S3."""
+    output_path = Path(OUTPUT_DIR)
+    if not output_path.exists():
+        logger.warning("Output directory does not exist — nothing to upload")
+        return
+    remote_folder = f"{run_prefix}/{function_invoke}_outputs"
+    descriptions = file_descriptions or {}
+
+    for file in output_path.rglob("*"):
+        if file.is_file():
+            if file.name == "manifest.json":
+                continue
+            rel = file.relative_to(output_path)
+            rel_parent = rel.parent
+            remote_subfolder = f"{remote_folder}/{rel_parent}" if str(rel_parent) != "." else remote_folder
+
+            try:
+                s3_ops.agent_put_file(
+                    local_file=file.name,
+                    local_folder=str(file.parent),
+                    remote_file=file.name,
+                    remote_folder=remote_subfolder,
+                    description=descriptions.get(str(rel), ""),
+                )
+                logger.info(f"Uploaded output: {remote_subfolder}/{file.name}")
+            except Exception as e:
+                logger.error(f"Failed to upload {file.name}: {e}")
+                sys.exit(1)
+
+
+def _upload_generated_code(function_invoke: str, run_prefix: str, s3_ops: "AgentS3Ops" = None):
+    """Upload the generated code file from CODE_DIR to S3 for TUI display."""
+    code_path = Path(CODE_DIR) / f"{function_invoke}.py"
+    if not code_path.exists():
+        logger.warning(f"Generated code file not found: {code_path}")
+        return
+    remote_folder = f"{run_prefix}/{function_invoke}_outputs"
+    try:
+        s3_ops.agent_put_file(
+            local_file=code_path.name,
+            local_folder=str(code_path.parent),
+            remote_file=code_path.name,
+            remote_folder=remote_folder,
+        )
+        logger.info(f"Uploaded generated code: {remote_folder}/{code_path.name}")
+    except Exception as e:
+        logger.warning(f"Could not upload generated code: {e}")
+
+
+def _clear_dir(path: str):
+    """Remove and recreate a directory."""
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+        os.makedirs(path, exist_ok=True)
+    except Exception as e:
+        logger.warning(f"Could not clear {path}: {e}")
+
+
+
+# Cache helpers
+
+def _cache_prefix(faasr: dict, action_name: str) -> str:
+    wf = faasr.get("WorkflowName", "workflow")
+    return f"{wf}/_cache/{action_name}"
+
+
+def _check_cache_hit(faasr: dict, action_name: str) -> "tuple[str, str, dict] | None":
+    try:
+        cache_keys = compute_cache_keys(faasr)
+        cache_key = cache_keys.get(action_name)
+        if not cache_key:
+            return None
+
+        s3_client, bucket = _get_cache_s3_client(faasr)
+        prefix = _cache_prefix(faasr, action_name)
+
+        if _s3_object_exists(s3_client, bucket, f"{prefix}/.invalid"):
+            logger.info(f"Cache invalidated for {action_name}")
+            return None
+
+        code_key = f"{prefix}/{cache_key}/code_raw.py"
+        manifest_key = f"{prefix}/{cache_key}/manifest.json"
+
+        if not _s3_object_exists(s3_client, bucket, code_key):
+            return None  # Cache miss
+
+        os.makedirs("/tmp/agent", exist_ok=True)
+        code_local = f"/tmp/agent/cache_{action_name}_code_raw.py"
+        manifest_local = f"/tmp/agent/cache_{action_name}_manifest.json"
+
+        if not _s3_download(s3_client, bucket, code_key, code_local):
+            return None
+        if not _s3_download(s3_client, bucket, manifest_key, manifest_local):
+            Path(code_local).unlink(missing_ok=True)
+            return None
+
+        try:
+            return cache_key, Path(code_local).read_text(), json.loads(Path(manifest_local).read_text())
+        except Exception as e:
+            logger.warning(f"Cache files unreadable for {action_name}: {e}")
+            return None
+        finally:
+            Path(code_local).unlink(missing_ok=True)
+            Path(manifest_local).unlink(missing_ok=True)
+
+    except Exception as e:
+        logger.warning(f"Cache check failed for {action_name}: {e}")
+        return None
+    
+
+def _get_cache_s3_client(faasr: dict):
+    from FaaSr_py.s3_api.registry import _get_s3_client
+    s3_client, target_s3 = _get_s3_client(faasr)
+    return s3_client, target_s3["Bucket"]
+
+
+def _s3_object_exists(s3_client, bucket: str, key: str) -> bool:
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception:
+        return False
+
+
+def _s3_download(s3_client, bucket: str, key: str, local_path: str) -> bool:
+    try:
+        Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+        s3_client.download_file(bucket, key, local_path)
+        return True
+    except Exception:
+        return False
+
+
+def _s3_upload_file(s3_client, bucket: str, key: str, local_path: str) -> bool:
+    try:
+        s3_client.upload_file(local_path, bucket, key)
+        return True
+    except Exception:
+        return False
+
+
+def _s3_delete(s3_client, bucket: str, key: str) -> None:
+    try:
+        s3_client.delete_object(Bucket=bucket, Key=key)
+    except Exception:
+        pass
+
+
+def _rewrite_remote_folder(remote_folder: str, faasr: dict) -> str:
+    """Inject the current workflow name and invocation ID into a cached remote_folder.
+
+    Expected format: {workflow_name}/{invocation_id}/{rest}
+    """
+    parts = remote_folder.split("/")
+    if len(parts) < 3:
+        return remote_folder
+    parts[0] = faasr.get("WorkflowName", parts[0])
+    parts[1] = faasr.get("InvocationID", parts[1])
+    return "/".join(parts)
+
+
+def _run_cached_action(
+    faasr: dict,
+    action_name: str,
+    cached_code: str,
+    cached_manifest: dict,
+    s3_ops: "AgentS3Ops",
+    result_file: str,
+) -> None:
+    """Re-execute cached code using the same trusted/untrusted boundary as fresh execution.
+
+    Step 1 (trusted): Download inputs from manifest
+    Step 2 (untrusted): Execute cached code via sandboxed subprocess
+    Step 3 (trusted): Upload outputs
+    """
+    try:
+        # Step 1 -- Download inputs in trusted process
+        os.makedirs(INPUT_DIR, exist_ok=True)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        os.makedirs(CODE_DIR, exist_ok=True)
+
+        for inp in cached_manifest.get("inputs", []):
+            try:
+                remote_folder = _rewrite_remote_folder(inp["remote_folder"], faasr)
+                faasr_get_file(
+                    faasr_payload=faasr,
+                    local_file=inp["local_file"],
+                    remote_file=inp["remote_file"],
+                    local_folder=INPUT_DIR,
+                    remote_folder=remote_folder,
+                )
+                logger.info(f"Downloaded cached input: {inp['remote_file']}")
+            except Exception as e:
+                logger.warning(f"Could not download cached input {inp.get('remote_file')}: {e}")
+
+        # Step 2 -- Execute cached code in untrusted subprocess
+        context = {
+            "prompt": "",
+            "pre_generated_code": cached_code,
+            "function_invoke": action_name,
+            "registry_entries": [],
+            "file_metadata": {},
+            "input_dir": INPUT_DIR,
+            "output_dir": OUTPUT_DIR,
+            "code_dir": CODE_DIR,
+            "logs_dir": LOGS_DIR,
+            "temperature": CODING_TEMP,
+            "eval_feedback": "",
+            "exception": "",
+            "loop_count": 0,
+        }
+
+        # Write cached code to CODE_DIR for the sandboxed subprocess
+        code_path = Path(CODE_DIR) / f"{action_name}.py"
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text(cached_code)
+
+        result = get_coding_backend().run(context)
+        logger.info(f"Cached code execution: success={result.success}")
+
+        if not result.success:
+            _write_agent_result(result_file, error=True, message=f"Cached code execution failed: {result.exception}")
+            return
+
+        # Step 3 -- Upload outputs in trusted process
+        _upload_outputs(action_name, _run_prefix(faasr), {}, s3_ops)
+
+        _write_agent_result(result_file, function_result=True)
+
+    except Exception as e:
+        err_msg = f"Cached action execution failed: {e}"
+        tb = tb_module.format_exc()
+        logger.error(f"{err_msg}\n{tb}")
+        _write_agent_result(result_file, error=True, message=err_msg, traceback=tb)
+
+
+def _write_manifest_from_cache(faasr: dict, action_name: str, manifest: dict) -> None:
+    """Write the cached manifest to OUTPUT_DIR so _upload_outputs includes it."""
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        manifest_path = Path(OUTPUT_DIR) / "manifest.json"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not write cached manifest: {e}")
+
+
+def _write_cache(action_name: str, faasr: dict) -> None:
+    try:
+        cache_keys = compute_cache_keys(faasr)
+        cache_key = cache_keys.get(action_name)
+        if not cache_key:
+            logger.warning(f"Could not compute cache key for {action_name}, skipping cache write")
+            return
+
+        s3_client, bucket = _get_cache_s3_client(faasr)
+        prefix = _cache_prefix(faasr, action_name)
+        versioned_prefix = f"{prefix}/{cache_key}"
+
+        code_path = Path(CODE_DIR) / f"{action_name}.py"
+        if not code_path.exists():
+            logger.warning(f"No generated code found for {action_name}, skipping cache write")
+            return
+
+        _s3_upload_file(s3_client, bucket, f"{versioned_prefix}/code_raw.py", str(code_path))
+        logger.info(f"Wrote cache code for {action_name} at {versioned_prefix}")
+
+        manifest_path = Path(OUTPUT_DIR) / "manifest.json"
+        if manifest_path.exists():
+            _s3_upload_file(s3_client, bucket, f"{versioned_prefix}/manifest.json", str(manifest_path))
+            logger.info(f"Wrote cache manifest for {action_name} at {versioned_prefix}")
+
+        _s3_delete(s3_client, bucket, f"{prefix}/.invalid")
+
+    except Exception as e:
+        logger.warning(f"Cache write failed for {action_name}: {e}")
+
+
+# Duration monitor
+
+def _start_duration_monitor(stop_event: threading.Event, faasr):
+    """Start a background thread that checkpoints state if the function nears timeout."""
+    def _monitor():
+        if not stop_event.wait(800):  # stops function if still running after 800s
+            logger.warning("Function approaching timeout — checkpointing")
+            _checkpoint_state_to_s3(faasr)
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+
+def _checkpoint_state_to_s3(faasr):
+    """Upload a checkpoint marker to S3. Best-effort."""
+    try:
+        import time
+        function_invoke = faasr.get("FunctionInvoke", "agent")
+        marker = f"/tmp/{function_invoke}_checkpoint_{int(time.time())}.json"
+        with open(marker, "w") as f:
+            json.dump({"status": "timeout_checkpoint", "function": function_invoke}, f)
+        faasr_put_file(
+            faasr_payload=faasr,
+            local_file=Path(marker).name,
+            remote_file=Path(marker).name,
+            local_folder="/tmp",
+            remote_folder=f"{_run_prefix(faasr)}/{function_invoke}_checkpoints",
+        )
+    except Exception as e:
+        logger.warning(f"Could not checkpoint to S3: {e}")
+
+
+
+# Utilities
+
+def _extract_json(text: str) -> Dict[str, Any] | None:
+    """Best-effort JSON extraction from LLM response."""
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start: end + 1])
+    except Exception:
+        return None
+    return None

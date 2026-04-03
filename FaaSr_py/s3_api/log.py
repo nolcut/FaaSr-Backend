@@ -21,8 +21,8 @@ def faasr_log(faasr_payload, log_message):
         log_message: str -- message to log
     """
     if not log_message:
-        logger.error("ERROR -- log_message is empty")
-        sys.exit(1)
+        logger.warning("Warning -- log_message is empty")
+        return
 
     log_folder = get_invocation_folder(faasr_payload)
     log_path = log_folder / faasr_payload.log_file

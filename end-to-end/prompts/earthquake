@@ -1,0 +1,45 @@
+I want to fetch and visualize recent earthquake activity across
+the western United States using the USGS Earthquake API.
+
+DATA ACQUISITION:
+- Query the USGS Earthquake API at
+  https://earthquake.usgs.gov/fdsnws/event/1/query
+- Request all earthquakes from the past 30 days with magnitude >= 2.0
+- Bounding box: latitude 32-49, longitude -125 to -114 (western US)
+- Request format: GeoJSON
+- No authentication required
+
+PROCESSING:
+- Use whatever magnitude scale the USGS API returns natively (ml or mw)
+- Drop any rows with null or missing magnitude or depth values
+- Use raw latitude/longitude coordinates directly — no reprojection
+- Map raw depth values in km directly to the plasma colormap,
+  letting matplotlib scale the range automatically from the
+  dataset min/max depth
+- Size points using an exponential scale where each unit increase in
+  magnitude doubles the marker area — use a base size of 80 and scale
+  relative to the dataset's actual magnitude range,
+  e.g. size = 80 * (2 ** (magnitude - mag_min))
+
+OUTPUT:
+- Download state boundary shapefiles from the Census Bureau for
+  CA, OR, WA, NV, ID, AZ, UT, MT
+- Plot earthquake locations as scatter points on a map
+- Set figure size to figsize=(12, 8) to ensure the map is wider than tall
+- After set_aspect('equal'), explicitly clamp axis limits:
+  ax.set_xlim(-125, -114)
+  ax.set_ylim(32, 49)
+- Set the map background to dark navy (#0d1b2a)
+- Set state boundary lines to light gray (#cccccc) with linewidth 0.8
+- Add a light gray grid (linestyle='--', alpha=0.3, linewidth=0.5)
+- Add black edges to earthquake scatter points (linewidths=0.3)
+  to help individual points stand out when clustered
+- Add a colorbar for depth labeled "Depth (km)"
+- Place the legend outside the map to the right using
+  loc='upper left', bbox_to_anchor=(1.15, 1.0)
+- Show magnitude sizes in the legend for M2, M3, M4, M5, M6
+- Cap legend marker size using markerscale=0.4 to prevent overflow
+- Set labelspacing=1.2 and handletextpad=1.0 to prevent overlap
+- Use a single-line title formatted as:
+  "Western US Earthquakes (M2.0+) | <start date> to <end date> | <N> events"
+- Save as EarthquakeMap.png and upload to S3

@@ -1,23 +1,25 @@
-*.DS_Store
+# Credentials & secrets
+.env
+.env.*
+*.env
+!*.env.template
+FaaSr_py/config/config.json
+
+# Python
 *.pyc
 **/__pycache__/
-FaaSr_py/config/config.json
-venv/*
-.Python
+
+# Virtual environments
+venv/
+.venv/
 env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-FaaSr_py/config/config.json
+
+# end-to-end runtime outputs
+end-to-end/downloads/
+end-to-end/exports/
+end-to-end/workflows/
+end-to-end/src/faasr_ai.egg-info/
+
+# OS
+.DS_Store
+**/.DS_Store

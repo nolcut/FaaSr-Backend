@@ -43,6 +43,16 @@
       "description": "The name of the Log file's folder",
       "type": "string"
     },
+    "GlobalInputFiles": {
+      "description": "Pre-existing file URIs or glob patterns (e.g., folder/file.ext, data/*.txt, data/*/text.file) made available to all agents as read-only inputs",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "GlobalInputFolders": {
+      "description": "S3 folder prefixes or glob patterns to scan; all discovered files become read-only registry entries (e.g., raw-data/, archive/*/)",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "FunctionRank": {
       "description": "The rank of the current function (optional)",
       "type": "integer"
@@ -75,7 +85,9 @@
               "type": "string",
               "enum": [
                 "Python",
-                "R"
+                "R",
+                "Agent",
+                "Bridge"
               ]
             },
             "RequiresVM": {
@@ -195,9 +207,67 @@
           },
           "required": [
             "FaaSServer",
-            "FunctionName"
+            "InvokeNext"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "Type": {
+                "enum": ["Python", "R"]
+              }
+            }
+          },
+          "then": {
+            "required": ["FaaSServer", "FunctionName"]
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "Type": {
+                  "const": "Agent"
+                }
+              }
+            },
+            "then": {
+              "required": ["FaaSServer", "Arguments"],
+              "properties": {
+                "Arguments": {
+                  "type": "object",
+                  "required": ["prompt"],
+                  "properties": {
+                    "prompt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Natural language prompt for the AI agent"
+                    }
+                  }
+                }
+              }
+            },
+            "else": {
+              "if": {
+                "properties": {
+                  "Type": {
+                    "const": "Bridge"
+                  }
+                }
+              },
+              "then": {
+                "required": ["FaaSServer", "InvokeNext"],
+                "properties": {
+                  "InvokeNext": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(?:\\([0-9]+\\))?$",
+                      "description": "Bridge InvokeNext must be unconditional string targets only"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

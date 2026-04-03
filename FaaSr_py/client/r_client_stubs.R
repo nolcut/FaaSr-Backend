@@ -142,6 +142,24 @@ faasr_invocation_id <- function() {
 }
 
 
+faasr_workflow_name <- function() {
+    request_json <- list(
+        "ProcedureID" = "faasr_workflow_name",
+        "Arguments" = list()
+    )
+    r <- POST("http://127.0.0.1:8000/faasr-action", body = request_json, encode = "json")
+    response_content <- content(r)
+
+    if (!is.null(response_content$Success) && response_content$Success) {
+        return(response_content$Data$workflow_name)
+    } else {
+        err_msg <- "Failed to get workflow name"
+        faasr_exit(error = TRUE, message = err_msg)
+        quit(status = 1, save = "no")
+    }
+}
+
+
 faasr_arrow_s3_bucket <- function(server_name = "", faasr_prefix = "") {
     # get s3 creds
     creds <- faasr_get_s3_creds(server_name = server_name)
@@ -175,7 +193,7 @@ faasr_arrow_s3_bucket <- function(server_name = "", faasr_prefix = "") {
 
 faasr_rank <- function(rank_value=NULL) {
     request_json <- list(
-        "ProcedureID" = "faasr_invocation_id",
+        "ProcedureID" = "faasr_rank",
         "Arguments" = list()
     )
     r <- POST("http://127.0.0.1:8000/faasr-action", body=request_json, encode="json")

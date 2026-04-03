@@ -1,0 +1,74 @@
+
+{
+  "FunctionInvoke": "GetData",
+  "WorkflowName": "Weather-Agent",
+  "InvocationIDFromDate": "%Y-%m-%d-%H-%M-%S",
+  "DefaultDataStore": "S3",
+  "LoggingDataStore": "S3",
+  "FaaSrLog": "FaaSrLog",
+  "GlobalInputFiles": ["test.txt"],
+  
+  "ActionList": {
+    "GetData": {
+      "FaaSServer": "GH",
+      "Type": "Agent",
+      "InvokeNext": ["ComputeStats"],
+      "Arguments": {
+        "prompt": "Download US state and county boundary shapefiles from the Census Bureau (states: https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_state_20m.zip, counties: https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_county_5m.zip). Filter to the state named Oregon and the county named Benton that lies within that state. Compute an outer bounding box around the county by expanding its min/max latitude and longitude by 0.5 degrees in each direction. Download the NOAA GHCND station inventory from https://www.ncei.noaa.gov/pub/data/ghcn/daily/ghcnd-inventory.txt, keep only stations that have both TMAX and TMIN records with an end date in the current year or later, and filter those stations to only the ones that fall within the outer bounding box. Save the Oregon state boundary, Benton County boundary, outer bounding box, and filtered station list as separate GeoJSON output files."
+      }
+    },
+    "ComputeStats": {
+      "FaaSServer": "GH",
+      "Type": "Agent",
+      "InvokeNext": ["PlotData"],
+      "Arguments": {
+        "prompt": "Using the station list produced by the previous step, download each station's full daily CSV record from https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily/access/<STATION_ID>.csv. Determine the target week: take today's date, subtract 28 days, then back up to the most recent Monday — use that Monday as the week start and the following Sunday as the week end. For each station CSV, filter rows to that date range, keeping TMIN and TMAX columns. Discard any rows with missing values. Average TMIN and TMAX separately across all days per station, then divide both averages by 10 to convert from tenths-of-a-degree to whole degrees Celsius. Combine all stations into a single GeoDataFrame with columns STATION, geometry, TMIN, and TMAX. Save the result as a GeoJSON output file."
+      }
+    },
+    "PlotData": {
+      "FaaSServer": "GH",
+      "Type": "Agent",
+      "InvokeNext": [],
+      "Arguments": {
+        "prompt": "Using the outer boundary, temperature data, state boundary, and county boundary GeoJSON files produced by the previous steps, create a figure with two side-by-side subplots. For each subplot, build a 100x100 interpolation grid spanning the outer boundary, then use cubic interpolation (scipy.interpolate.griddata) to interpolate station TMIN values (left subplot) and TMAX values (right subplot) across that grid. Render each as a filled contour plot (20 levels) with alpha 0.8 — use colormap 'Blues_r' for TMIN and 'Reds' for TMAX. Overlay the station points as scatter markers colored by their value, with black edges. Draw the state and county boundaries on both subplots. Set axis limits to the outer boundary extents, match the aspect ratio to the county bounds, and set tick marks every 0.5 degrees. Label axes as Longitude and Latitude, add a colorbar labeled 'Temperature (°C)', and title each subplot 'Minimum Temperature Heatmap (°C)' and 'Maximum Temperature Heatmap (°C)'. Use the invocation ID (formatted as %Y-%m-%d-%H-%M-%S) to determine the week start date (subtract 28 days then back up to Monday) and set the figure supertitle to 'Temperature Heatmap for Benton County for week starting <day>, <month> <date>, <year>'. Save the figure as a PNG output file."
+      }
+    }
+  },
+
+  "ActionContainers": {
+    "GetData": "ghcr.io/nolcut/full-agent-gh:agents",
+    "ComputeStats": "ghcr.io/nolcut/full-agent-gh:agents",
+    "PlotData": "ghcr.io/nolcut/full-agent-gh:agents"
+  },
+
+  "ComputeServers": {
+    "GH": {
+      "FaaSType": "GitHubActions",
+      "UseSecretStore": true,
+      "ActionRepoName": "FaaSr-workflow-testing",
+      "Branch": "main",
+      "UserName": "nolcut"
+    }
+  },
+
+  "DataStores": {
+    "S3": {
+      "Endpoint": "https://s3.us-east-1.amazonaws.com",
+      "Bucket": "faasr-weather-agent",
+      "Region": "us-east-1",
+      "Writable": "TRUE"
+    }
+  },
+
+  "PyPIPackageDownloads": {
+    "GetData": ["geopandas"],
+    "ComputeStats": ["geopandas"],
+    "PlotData": [
+      "geopandas",
+      "matplotlib",
+      "numpy",
+      "scipy"
+    ]
+  }
+
+}

@@ -1,0 +1,51 @@
+{
+  "ActionList": {
+    "<ACTION_ID>": {
+      "Arguments": {
+        "folder": "<FOLDER_NAME>",
+        "<ARG_NAME_1>": "<ARG_VALUE_1>",
+        "<ARG_NAME_2>": "<ARG_VALUE_2>"
+      },
+      "InvokeNext": [
+        "<NEXT_ACTION_ID>"
+      ],
+      "FaaSServer": "GH",
+      "Type": "Python",
+      "FunctionName": "<FUNCTION_NAME>"
+    }
+  },
+
+  "ComputeServers": {
+    "GH": {
+      "FaaSType": "GitHubActions",
+      "UserName": "<GITHUB_USERNAME>",
+      "UseSecretStore": true,
+      "ActionRepoName": "<ACTION_REPO_NAME>",
+      "Branch": "<BRANCH_NAME>"
+    }
+  },
+
+  "DataStores": {
+    "S3": {
+      "Endpoint": "<S3_ENDPOINT>",
+      "Bucket": "<S3_BUCKET>",
+      "Region": "<S3_REGION>"
+    }
+  },
+
+  "ActionContainers": {
+    "<ACTION_ID>": "ghcr.io/faasr/github-actions-python:latest"
+  },
+
+  "FunctionInvoke": "<ENTRY_ACTION_ID>",
+  "DefaultDataStore": "S3",
+
+  "FunctionGitRepo": {
+    "<FUNCTION_NAME>": "<ORG>/<REPO>/<PATH>"
+  },
+
+  "LoggingDataStore": "S3",
+  "FaaSrLog": "FaaSrLog",
+  "InvocationID": "<INVOCATION_ID>",
+  "WorkflowName": "<WORKFLOW_NAME>"
+}
