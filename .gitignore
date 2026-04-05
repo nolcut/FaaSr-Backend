@@ -8,6 +8,7 @@ FaaSr_py/config/config.json
 # Python
 *.pyc
 **/__pycache__/
+FaaSr_py.egg-info/
 
 # Virtual environments
 venv/
@@ -23,3 +24,4 @@ end-to-end/src/faasr_ai.egg-info/
 # OS
 .DS_Store
 **/.DS_Store
+

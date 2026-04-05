@@ -196,7 +196,7 @@ You have three tools:
 Workflow:
 1. List input files: import os; print(os.listdir(input_dir))
 2. Download any external datasets you need with download_dataset
-3. Load and inspect files: df.head(), df.dtypes, df.describe(), df.isnull().sum()
+3. Load and inspect files — check structure, types, and content appropriate to the file format
 4. Prototype and verify key transformations with execute_code
 5. Call finalize_function with the complete, tested code
 
