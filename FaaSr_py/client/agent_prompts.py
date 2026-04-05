@@ -138,3 +138,97 @@ AVAILABLE FUNCTIONS (injected into runtime, do not import):
 
 Write Python code that reads from input_dir, processes the data, and writes outputs to output_dir.
 Log key steps with faasr_log."""
+
+
+def build_agentic_coding_system_prompt(context: dict) -> str:
+    registry_entries = context.get("registry_entries", [])
+    file_metadata = context.get("file_metadata", {})
+    input_dir = context.get("input_dir", "/tmp/agent/input")
+    output_dir = context.get("output_dir", "/tmp/agent/output")
+    eval_feedback = context.get("eval_feedback", "")
+    exception = context.get("exception", "")
+    loop_count = context.get("loop_count", 0)
+
+    uri_descriptions = {e.get("file_uri", ""): e.get("description", "") for e in registry_entries}
+
+    file_summary = ""
+    if file_metadata:
+        parts = []
+        max_schema_chars = 1000
+        for uri, meta in file_metadata.items():
+            local_path = meta.get("local_path", "")
+            sidecar = meta.get("sidecar", {})
+            sample = meta.get("sample", "")
+            description = uri_descriptions.get(uri, "")
+            sidecar_str = json.dumps(sidecar, indent=2) if sidecar else "(no schema)"
+
+            if len(sidecar_str) > max_schema_chars:
+                sidecar_str = sidecar_str[:max_schema_chars] + "\n... (schema truncated)"
+
+            part = f"File: {uri}\n  Local path: {local_path}\n"
+            if description:
+                part += f"  Description: {description}\n"
+            part += f"  Schema: {sidecar_str}\n  Sample:\n{sample}"
+            parts.append(part)
+        file_summary = "Input files:\n" + "\n\n".join(parts)
+
+    retry_block = ""
+    if loop_count > 0:
+        retry_block = f"\n\nPREVIOUS ATTEMPT FAILED (attempt {loop_count}).\n"
+        if exception:
+            retry_block += f"Traceback:\n{exception}\n"
+        if eval_feedback:
+            retry_block += f"Evaluator feedback: {eval_feedback}\n"
+        retry_block += (
+            "You MUST fix the issue above. Do not repeat the same mistake.\n"
+            "If the failure was a missing package, call faasr_install(\"package_name\") "
+            "at the top of your finalized code BEFORE any import that uses it.\n"
+        )
+
+    return f"""You are a coding agent that explores data before writing code.
+
+You have three tools:
+- execute_code: run Python to inspect data. Variables persist between calls.
+  input_dir is available. output_dir is NOT available here (exploration only).
+- download_dataset: fetch an external file by URL into input_dir.
+- finalize_function: submit the complete aggregate function. Ends the loop.
+
+Workflow:
+1. List input files: import os; print(os.listdir(input_dir))
+2. Download any external datasets you need with download_dataset
+3. Load and inspect files: df.head(), df.dtypes, df.describe(), df.isnull().sum()
+4. Prototype and verify key transformations with execute_code
+5. Call finalize_function with the complete, tested code
+
+CRITICAL — finalize_function code must be FULLY SELF-CONTAINED:
+- It runs in a fresh namespace. Nothing from your exploration carries over.
+- Include ALL imports, ALL faasr_install() calls, ALL data loading, ALL logic.
+- Read inputs from: {input_dir}
+- Write ALL outputs to: {output_dir}
+- Use the input_dir and output_dir variables injected into the runtime.
+
+{retry_block}
+
+PACKAGE INSTALLATION RULES:
+For every package NOT in the pre-installed list, call faasr_install() immediately before the import:
+
+    faasr_install("geopandas")
+    import geopandas as gpd
+
+Do this in both execute_code snippets AND in finalize_function.
+
+CRITICAL RUNTIME RULES (for finalize_function):
+- DO NOT use 'faasr' as a variable name or import any 'faasr' module
+- Use ONLY the provided functions (faasr_log, faasr_invocation_id, faasr_rank)
+- DO NOT perform any S3 operations
+- Output filenames MUST be static string literals — no dates, timestamps, or f-strings with runtime values
+
+AVAILABLE FUNCTIONS (injected into runtime):
+- faasr_log(msg): append to local log file
+- faasr_invocation_id(): returns current invocation ID string
+- faasr_rank(): returns dict with "rank" and "max_rank"
+- faasr_install(package_name): install a package via pip before importing
+
+{AVAILABLE_PACKAGES}
+
+{file_summary}"""
