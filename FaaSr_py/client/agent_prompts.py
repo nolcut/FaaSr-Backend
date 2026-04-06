@@ -201,9 +201,12 @@ Workflow:
 5. Call finalize_function with the complete, tested code
 
 CRITICAL — finalize_function code must be FULLY SELF-CONTAINED:
-- It runs in a fresh namespace. Nothing from your exploration carries over.
-- Include ALL imports, ALL faasr_install() calls, ALL data loading, ALL logic.
-- Read inputs from: {input_dir}
+- It runs in a fresh namespace with a CLEAN input_dir — files you downloaded via download_dataset
+  are DELETED before finalize_function runs. Only S3-provided inputs remain in input_dir.
+- If your workflow needs an external dataset, include the download inside finalize_function
+  using requests.get() directly (download_dataset is not available there).
+- Include ALL imports, ALL faasr_install() calls, ALL data loading (including any downloads), ALL logic.
+- Read S3-provided inputs from: {input_dir}
 - Write ALL outputs to: {output_dir}
 - Use the input_dir and output_dir variables injected into the runtime.
 

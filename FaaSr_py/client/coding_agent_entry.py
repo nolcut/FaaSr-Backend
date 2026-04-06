@@ -23,7 +23,7 @@ def _run_snippet(code: str, namespace: dict) -> str:
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             exec(code, namespace)
-    except Exception:
+    except BaseException:
         buf.write(traceback.format_exc())
     return buf.getvalue() or "(no output)"
 
@@ -59,18 +59,23 @@ def _build_mcp_server(explore_ns: dict, input_dir: str, state: dict):
 
     @tool(
         "download_dataset",
-        "Download a file from a URL into input_dir. Returns the local path.",
+        "Download a file from a URL into input_dir. Use this during exploration to inspect "
+        "external data. IMPORTANT: files downloaded here will NOT be present when "
+        "finalize_function runs. Your finalize_function code must re-download any external "
+        "files it needs using requests.get() directly.",
         {"url": str, "filename": str},
     )
     async def download_dataset(args: dict) -> dict:
         result = _download(args["url"], args["filename"], input_dir)
+        state.setdefault("external_downloads", []).append(args["filename"])
         return {"content": [{"type": "text", "text": result}]}
 
     @tool(
         "finalize_function",
         "Submit the final aggregate function. Code must be FULLY SELF-CONTAINED "
-        "(all imports, faasr_install calls, data loading). Runs in a fresh namespace "
-        "with input_dir and output_dir. Nothing from exploration carries over.",
+        "(all imports, faasr_install calls, data loading including any downloads). "
+        "Runs in a fresh namespace with input_dir and output_dir. "
+        "Nothing from exploration carries over — not variables, not downloaded files.",
         {"code": str},
     )
     async def finalize_function(args: dict) -> dict:
@@ -83,10 +88,11 @@ def _build_mcp_server(explore_ns: dict, input_dir: str, state: dict):
     )
 
 
-async def main():
+async def main() -> bool:
+    """Run the coding agent. Returns True on success, False on failure."""
     if len(sys.argv) < 3:
         print("Usage: coding_agent_entry.py <context_json> <result_json>", file=sys.stderr)
-        sys.exit(1)
+        return False
 
     ctx_path = sys.argv[1]
     result_path = sys.argv[2]
@@ -100,14 +106,14 @@ async def main():
             context = json.load(f)
     except Exception as e:
         write_result(False, f"Could not read context: {e}")
-        sys.exit(1)
+        return False
 
     try:
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
         from FaaSr_py.client.agent_prompts import build_agentic_coding_system_prompt
     except Exception as e:
         write_result(False, f"Import error: {e}\n{traceback.format_exc()}")
-        sys.exit(1)
+        return False
 
     # Ensure directories exist
     output_dir = context.get("output_dir", "/tmp/agent/output")
@@ -151,6 +157,7 @@ async def main():
     # If caller provides pre-generated code (e.g. cache hit), skip the agentic loop
     if context.get("pre_generated_code"):
         code = context["pre_generated_code"]
+        exploration_downloads = []
     else:
         try:
             from claude_agent_sdk import (
@@ -162,7 +169,7 @@ async def main():
             )
         except ImportError as e:
             write_result(False, f"claude_agent_sdk not available: {e}")
-            sys.exit(1)
+            return False
 
         # claude_agent_sdk reads ANTHROPIC_API_KEY; map AGENT_KEY to it
         agent_key = os.environ.get("AGENT_KEY", "")
@@ -209,16 +216,25 @@ async def main():
                         break
         except Exception as e:
             write_result(False, f"Agent loop error: {e}\n{traceback.format_exc()}")
-            sys.exit(1)
+            return False
 
         code = state["finalized_code"]
         if not code:
             write_result(False, "Agent did not call finalize_function")
-            sys.exit(1)
+            return False
+
+        exploration_downloads = state.get("external_downloads", [])
 
     # Scrub API keys before executing generated code
     os.environ.pop("AGENT_KEY", None)
     os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # Remove files downloaded during exploration — they must not leak into finalize_function.
+    # If the generated code needs external data, it must download it itself (via requests.get).
+    # Failing here on first run is better than silently failing on cache replay.
+    for filename in exploration_downloads:
+        stale = Path(input_dir) / filename
+        stale.unlink(missing_ok=True)
 
     function_invoke = context.get("function_invoke", "coding_agent")
     code_path = Path(code_dir) / f"{function_invoke}.py"
@@ -242,12 +258,15 @@ async def main():
     try:
         exec(code, fresh_namespace)
         write_result(True)
-    except Exception:
+        return True
+    except BaseException:
         tb = traceback.format_exc()
         _faasr_log(f"Code execution failed:\n{tb}")
         write_result(False, tb)
-        sys.exit(1)
+        return False
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    success = asyncio.run(main())
+    if not success:
+        sys.exit(1)
