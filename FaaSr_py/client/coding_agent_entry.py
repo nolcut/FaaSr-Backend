@@ -193,7 +193,6 @@ async def main():
                 "mcp__coding__download_dataset",
                 "mcp__coding__finalize_function",
             ],
-            permission_mode="bypassPermissions",
             max_turns=15,
         )
 

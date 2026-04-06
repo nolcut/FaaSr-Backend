@@ -115,8 +115,9 @@ def run_agent_function(faasr, prompt, action_name, result_file):
         finally:
             stop_event.set()
 
-        result = final_state.get("eval_decision") != "abort"
-        _write_agent_result(result_file, function_result=result)
+        if final_state.get("eval_decision") != "abort":
+            _write_agent_result(result_file, function_result=True)
+        # abort: _eval_router already wrote error=True to result_file — don't overwrite
 
     except BaseException as e:  # catches SystemExit too
         err_msg = f"Agent execution failed: {str(e)}"
