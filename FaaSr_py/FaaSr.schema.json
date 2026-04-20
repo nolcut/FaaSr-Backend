@@ -81,6 +81,19 @@
             "Arguments": {
               "type": "object"
             },
+            "ArgumentGenerator": {
+              "type": "object",
+              "description": "Map of argument name to generator spec for per-rank value generation",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "Name": { "type": "string", "minLength": 1 },
+                  "Arguments": { "type": "object" }
+                },
+                "required": ["Name"],
+                "additionalProperties": false
+              }
+            },
             "Type": {
               "type": "string",
               "enum": [
@@ -599,6 +612,22 @@
         "": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "Generators": {
+      "description": "URLs for user-hosted generator functions (same path syntax as FunctionGitRepo)",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "minLength": 1
+      },
+      "patternProperties": {
+        "": {
+          "type": [
+            "string",
+            "array"
+          ]
         }
       }
     },

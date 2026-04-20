@@ -61,6 +61,20 @@ def run_py_function(faasr, func_name, args, func_path=None):
     user_function.__globals__["faasr_get_s3_creds"] = faasr_get_s3_creds
     user_function.__globals__["faasr_invocation_id"] = faasr_invocation_id
 
+    if not global_config.USE_LOCAL_USER_FUNC and args:
+        import inspect
+        sig = inspect.signature(user_function)
+        accepts_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if not accepts_kwargs:
+            extras = set(args) - set(sig.parameters)
+            if extras:
+                faasr_exit(
+                    f"Arguments {sorted(extras)} are not parameters of {func_name}. "
+                    f"Check ArgumentGenerator keys match the function signature."
+                )
+
     try:
         if global_config.USE_LOCAL_USER_FUNC:
             print(f"using local function {global_config.LOCAL_FUNCTION_NAME}")

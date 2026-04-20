@@ -9,6 +9,7 @@ import requests
 
 from FaaSr_py.config.debug_config import global_config
 from FaaSr_py.engine.faasr_payload import FaaSrPayload
+from FaaSr_py.helpers.argument_generators import resolve_argument_generators
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,12 @@ class Scheduler:
             else:
                 if "FunctionRank" in self.faasr:
                     del self.faasr["FunctionRank"]
+
+            rank_args = resolve_argument_generators(self.faasr, function, rank, rank_num)
+            if rank_args:
+                self.faasr["RankArguments"] = rank_args
+            elif "RankArguments" in self.faasr:
+                del self.faasr["RankArguments"]
 
             if next_server not in self.faasr["ComputeServers"]:
                 err_msg = f"invalid server name: {next_server}"

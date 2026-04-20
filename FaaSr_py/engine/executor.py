@@ -314,12 +314,16 @@ class Executor:
 
     def _get_user_function_args(self, action_name):
         """
-        Returns user function arguments
+        Returns user function arguments, merging RankArguments over static Arguments.
+        RankArguments (per-rank values resolved by the scheduler) take precedence.
 
         Returns:
             dict -- user function arguments
         """
-        return self.faasr["ActionList"][action_name].get("Arguments", {}) or {}
+        args = dict(self.faasr["ActionList"][action_name].get("Arguments", {}) or {})
+        rank_args = self.faasr.get("RankArguments") or {}
+        args.update(rank_args)
+        return args
 
     def get_function_return(self, port=8000):
         """
