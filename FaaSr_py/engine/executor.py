@@ -128,11 +128,11 @@ class Executor:
                             self.faasr["InvocationID"],
                         ], capture_output=True, text=True
                     )
-                    logger.error(f"Function stdout: {julia_func.stdout}")
-                    logger.error(f"Function stderr: {julia_func.stderr}")
-                    logger.error(f"Function return code: {julia_func.returncode}")
                 except Exception as e:
                     logger.error(f"Error running Julia function: {e}")
+                    logger.error(f"Function stdout: {julia_func.stdout}")
+                    logger.error(f"Function stderr: {julia_func.stderr}")
+                    logger.error(f"Function return code: {julia_func.returncode}"
                     sys.exit(1)
                 func_res = julia_func.returncode
 
@@ -141,6 +141,9 @@ class Executor:
                 sys.exit(1)
 
             if func_res != 0:
+                logger.error(f"Function stdout: {julia_func.stdout}")
+                logger.error(f"Function stderr: {julia_func.stderr}")
+                logger.error(f"Function return code: {julia_func.returncode}")
                 raise RuntimeError(
                     f"non-zero exit code ({func_res!r}) from user function"
                 )
