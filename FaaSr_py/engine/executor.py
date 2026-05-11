@@ -132,7 +132,7 @@ class Executor:
                     logger.error(f"Error running Julia function: {e}")
                     logger.error(f"Function stdout: {julia_func.stdout}")
                     logger.error(f"Function stderr: {julia_func.stderr}")
-                    logger.error(f"Function return code: {julia_func.returncode}"
+                    logger.error(f"Function return code: {julia_func.returncode}")
                     sys.exit(1)
                 func_res = julia_func.returncode
 
