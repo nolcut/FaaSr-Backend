@@ -453,7 +453,7 @@ def faasr_func_dependancy_install(faasr_source, action):
         logger.debug(f"Packages in /tmp/Rlibs: {os.listdir('/tmp/Rlibs')}")
 
     elif "JuliaPkgPackage" in faasr_source and func_type == "Julia":
-        lib_path = "/tmp/julia_depot"
+        lib_path = os.getenv("JULIA_DEPOT_PATH")
         if "JuliaPkgPackage" in faasr_source:
             pkg_packages = faasr_source["JuliaPkgPackage"].get(func_name)
 
