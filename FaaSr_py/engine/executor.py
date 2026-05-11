@@ -102,7 +102,7 @@ class Executor:
                 julia_depot = os.getenv('JULIA_DEPOT_PATH')
                 print(f"Julia depot path: {julia_depot}")
                 print(f"contents: {os.listdir(julia_depot)}")
-                contents = os.listdir(f"{julia_depot}/{packages}")
+                contents = os.listdir(f"{julia_depot}/packages")
                 print(f"Packages: {contents}")
 
                 client_dir = Path(__file__).parent.parent / "client"
