@@ -118,8 +118,9 @@ def register_request_handler(faasr_payload):
             logger.error(err_msg)
             error = True
             sys.exit(1)
-        # flush log after every function, since we don't know when user function will end
-        flush_s3_log()
+        finally:
+            # flush log after every function, since we don't know when user function will end
+            flush_s3_log()
         return return_obj
 
     @faasr_api.post("/faasr-return")
